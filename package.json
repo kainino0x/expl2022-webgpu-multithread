@@ -1,0 +1,11 @@
+{
+  "name": "webgpu-multithread-test",
+  "version": "0.0.1",
+  "scripts": {
+    "start": "http-server -c-1 -a127.0.0.1 -p8070"
+  },
+  "dependencies": {
+    "@webgpu/types": "^0.1.22",
+    "http-server": "^14.1.1"
+  }
+}
