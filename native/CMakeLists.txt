@@ -2,7 +2,14 @@ cmake_minimum_required(VERSION 3.10)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 project(hello)
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
+
+set(DAWN_ENABLE_PIC        ON CACHE BOOL "Position-Independent-Code")
+set(DAWN_ENABLE_DESKTOP_GL OFF CACHE BOOL "OpenGL backend")
+set(DAWN_ENABLE_OPENGLES   OFF CACHE BOOL "OpenGL ES backend")
+set(DAWN_BUILD_EXAMPLES    OFF CACHE BOOL "Dawn examples")
+set(TINT_BUILD_SAMPLES     OFF CACHE BOOL "Tint examples")
+set(TINT_BUILD_GLSL_WRITER OFF CACHE BOOL "OpenGL SL writer")
 
 if(NOT EMSCRIPTEN)
     add_subdirectory("third_party/dawn" EXCLUDE_FROM_ALL)
@@ -29,14 +36,10 @@ if(EMSCRIPTEN)
         #PRIVATE "SHELL:-s VERBOSE=1"
         )
 else()
-    add_compile_definitions(DAWN_ENABLE_DESKTOP_GL=OFF)
-    add_compile_definitions(DAWN_ENABLE_OPENGLES=OFF)
     target_link_libraries(hello
         dawn_headers
         dawncpp
         dawn_native
         dawn_proc
         )
-    target_link_options(hello
-        PRIVATE "LINKER:--copy-dt-needed-entries")
 endif()
