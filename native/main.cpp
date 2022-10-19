@@ -27,7 +27,9 @@
 #include <memory>
 
 #include <unistd.h>  //Header file for sleep(). man 3 sleep for details.
-#include <pthread.h>
+// #include <pthread.h>
+
+#include <thread>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -484,30 +486,42 @@ void frame() {
 
 struct ThreadArg {
     // device
-    wgpu::Buffer buffer;
+    // wgpu::Buffer buffer;
     uint32_t value;
 
-    pthread_t threadId;
+    // pthread_t threadId;
+
+    // std::thread thread;
 };
 
-
-void* threadFunc(void* vargp) {
-    // sleep(1);
+// // pthread style
+// void* threadFunc(void* vargp) {
+//     // sleep(1);
     
 
-    ThreadArg* arg = static_cast<ThreadArg*>(vargp);
+//     ThreadArg* arg = static_cast<ThreadArg*>(vargp);
 
-    uint32_t* ptr = static_cast<uint32_t*>(arg->buffer.GetMappedRange());
-    *ptr = arg->value;
-    arg->buffer.Unmap();
+//     // uint32_t* ptr = static_cast<uint32_t*>(arg->buffer.GetMappedRange());
+//     // *ptr = arg->value;
+//     // arg->buffer.Unmap();
 
-    printf("Printing from Thread %d\n", arg->threadId);
+//     // printf("Printing from Thread %d\n", arg->threadId);
+//     printf("Printing from Thread\n");
 
-    return nullptr;
+//     return nullptr;
+// }
+
+// std::thread style
+void threadFunc(ThreadArg arg) {
+
+    // uint32_t* ptr = static_cast<uint32_t*>(arg->buffer.GetMappedRange());
+    // *ptr = arg->value;
+    // arg->buffer.Unmap();
+
+    printf("Printing from Thread 0x%.8x\n", arg.value);
+
+    return;
 }
-
-
-
 
 void doMultithreadingBufferTest() {
     pthread_t threadId;
@@ -518,38 +532,45 @@ void doMultithreadingBufferTest() {
     descriptor.usage = wgpu::BufferUsage::MapRead;
     descriptor.mappedAtCreation = true;
 
-    ThreadArg threadArgs[] = {
-        ThreadArg{
-            device.CreateBuffer(&descriptor),
+    // std::thread style
+    std::thread t0(threadFunc, std::move(ThreadArg{
+            // device.CreateBuffer(&descriptor),
             0x01020304,
-        },
-        ThreadArg{
-            device.CreateBuffer(&descriptor),
-            0x05060708,
-        },
-    };
+        }));
+    // std::thread t1(threadFunc, std::move(ThreadArg{
+    //         device.CreateBuffer(&descriptor),
+    //         0x05060708,
+    //     }));
 
-    for (auto& arg : threadArgs) {
-        pthread_create(&arg.threadId, nullptr, threadFunc, &arg);
-    }
+    t0.join();
+    // t1.join();
 
-    for (auto& arg : threadArgs) {
-        int rc = pthread_join(arg.threadId, nullptr);
-        if (rc) {
-            printf("Error:unable to join, %d\n", rc);
-            exit(-1);
-        }
-    }
     printf("After Thread\n");
 
-    for (int i = 0; i < 300; i++) {
-        device.Tick();
-    }
-    sleep(1);
 
-    for (auto& arg : threadArgs) {
-        issueContentsCheck(__FUNCTION__, arg.buffer, arg.value);
-    }
+// // Use pthread
+//     for (auto& arg : threadArgs) {
+//         pthread_create(&arg.threadId, nullptr, threadFunc, &arg);
+//     }
+
+//     for (auto& arg : threadArgs) {
+//         int rc = pthread_join(arg.threadId, nullptr);
+//         if (rc) {
+//             printf("Error:unable to join, %d\n", rc);
+//             exit(-1);
+//         }
+//     }
+//     printf("After Thread\n");
+
+//     for (int i = 0; i < 300; i++) {
+//         device.Tick();
+//     }
+//     sleep(1);
+
+
+    // for (auto& arg : threadArgs) {
+    //     issueContentsCheck(__FUNCTION__, arg.buffer, arg.value);
+    // }
     
     testsCompleted++;
 }

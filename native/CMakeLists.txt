@@ -36,6 +36,7 @@ if(EMSCRIPTEN)
         #PRIVATE "SHELL:--closure 1"
         #PRIVATE "SHELL:-s VERBOSE=1"
 
+        PRIVATE "SHELL:-s USE_PTHREADS=1"
         PRIVATE "SHELL:-s PTHREAD_POOL_SIZE=4"
         )
 else()
