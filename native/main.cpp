@@ -295,6 +295,7 @@ void issueContentsCheck(const char* functionName,
     readbackBuffer.MapAsync(
         wgpu::MapMode::Read, 0, 4,
         [](WGPUBufferMapAsyncStatus status, void* vp_userdata) {
+            printf("\n\n%d\n\n", status);
             assert(status == WGPUBufferMapAsyncStatus_Success);
             std::unique_ptr<UserData> userdata(reinterpret_cast<UserData*>(vp_userdata));
 
@@ -481,10 +482,27 @@ void frame() {
 }
 
 
+struct ThreadArg {
+    // device
+    wgpu::Buffer buffer;
+    uint32_t value;
+
+    pthread_t threadId;
+};
+
 
 void* threadFunc(void* vargp) {
-    sleep(1);
-    printf("Printing from Thread \n");
+    // sleep(1);
+    
+
+    ThreadArg* arg = static_cast<ThreadArg*>(vargp);
+
+    uint32_t* ptr = static_cast<uint32_t*>(arg->buffer.GetMappedRange());
+    *ptr = arg->value;
+    arg->buffer.Unmap();
+
+    printf("Printing from Thread %d\n", arg->threadId);
+
     return nullptr;
 }
 
@@ -494,9 +512,44 @@ void* threadFunc(void* vargp) {
 void doMultithreadingBufferTest() {
     pthread_t threadId;
     printf("Before Thread\n");
-    pthread_create(&threadId, nullptr, threadFunc, nullptr);
-    pthread_join(threadId, nullptr);
+
+    wgpu::BufferDescriptor descriptor{};
+    descriptor.size = 4;
+    descriptor.usage = wgpu::BufferUsage::MapRead;
+    descriptor.mappedAtCreation = true;
+
+    ThreadArg threadArgs[] = {
+        ThreadArg{
+            device.CreateBuffer(&descriptor),
+            0x01020304,
+        },
+        ThreadArg{
+            device.CreateBuffer(&descriptor),
+            0x05060708,
+        },
+    };
+
+    for (auto& arg : threadArgs) {
+        pthread_create(&arg.threadId, nullptr, threadFunc, &arg);
+    }
+
+    for (auto& arg : threadArgs) {
+        int rc = pthread_join(arg.threadId, nullptr);
+        if (rc) {
+            printf("Error:unable to join, %d\n", rc);
+            exit(-1);
+        }
+    }
     printf("After Thread\n");
+
+    for (int i = 0; i < 300; i++) {
+        device.Tick();
+    }
+    sleep(1);
+
+    for (auto& arg : threadArgs) {
+        issueContentsCheck(__FUNCTION__, arg.buffer, arg.value);
+    }
     
     testsCompleted++;
 }
