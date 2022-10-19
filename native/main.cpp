@@ -26,6 +26,9 @@
 #include <cstdlib>
 #include <memory>
 
+#include <unistd.h>  //Header file for sleep(). man 3 sleep for details.
+#include <pthread.h>
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #include <emscripten/html5.h>
@@ -477,15 +480,46 @@ void frame() {
 
 }
 
+
+
+void* threadFunc(void* vargp) {
+    sleep(1);
+    printf("Printing from Thread \n");
+    return nullptr;
+}
+
+
+
+
+void doMultithreadingBufferTest() {
+    pthread_t threadId;
+    printf("Before Thread\n");
+    pthread_create(&threadId, nullptr, threadFunc, nullptr);
+    pthread_join(threadId, nullptr);
+    printf("After Thread\n");
+    
+    testsCompleted++;
+}
+
+
+
+
+
+
+
+
 void run() {
     init();
 
-    static constexpr int kNumTests = 5;
-    doCopyTestMappedAtCreation(false);
-    doCopyTestMappedAtCreation(true);
-    doCopyTestMapAsync(false);
-    doCopyTestMapAsync(true);
-    doRenderTest();
+    static constexpr int kNumTests = 1;
+    doMultithreadingBufferTest();
+
+    // static constexpr int kNumTests = 5;
+    // doCopyTestMappedAtCreation(false);
+    // doCopyTestMappedAtCreation(true);
+    // doCopyTestMapAsync(false);
+    // doCopyTestMapAsync(true);
+    // doRenderTest();
 
 #ifdef __EMSCRIPTEN__
     {

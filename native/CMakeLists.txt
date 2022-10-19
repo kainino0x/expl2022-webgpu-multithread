@@ -4,6 +4,8 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 project(hello)
 set(CMAKE_CXX_STANDARD 17)
 
+add_compile_options(-pthread)
+
 if(NOT EMSCRIPTEN)
     set(DAWN_ENABLE_PIC        ON CACHE BOOL "Position-Independent-Code")
     set(DAWN_ENABLE_DESKTOP_GL OFF CACHE BOOL "OpenGL backend")
@@ -33,6 +35,8 @@ if(EMSCRIPTEN)
         PRIVATE "SHELL:-s SAFE_HEAP=1"
         #PRIVATE "SHELL:--closure 1"
         #PRIVATE "SHELL:-s VERBOSE=1"
+
+        PRIVATE "SHELL:-s PTHREAD_POOL_SIZE=4"
         )
 else()
     target_link_libraries(hello
