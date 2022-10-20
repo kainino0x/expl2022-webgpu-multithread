@@ -25,11 +25,19 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <vector>
 
 #include <unistd.h>  //Header file for sleep(). man 3 sleep for details.
 // #include <pthread.h>
 
 #include <thread>
+#include <mutex>
+
+static wgpu::Device device;
+static wgpu::Queue queue;
+static wgpu::Buffer readbackBuffer;
+static wgpu::RenderPipeline pipeline;
+static int testsCompleted = 0;
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -125,7 +133,8 @@ const char* AdapterTypeName(wgpu::AdapterType t)
   return "?";
 }
 
-void GetDevice(void (*callback)(wgpu::Device)) {
+// void GetDevice(void (*callback)(wgpu::Device)) {
+void GetDevice() {
     instance = std::make_unique<dawn::native::Instance>();
     instance->DiscoverDefaultAdapters();
 
@@ -160,12 +169,11 @@ void GetDevice(void (*callback)(wgpu::Device)) {
     }
     printf("\n\n");
 
-    
-    wgpu::Device device = wgpu::Device::Acquire(backendAdapter.CreateDevice());
+    device = wgpu::Device::Acquire(backendAdapter.CreateDevice());
     DawnProcTable procs = dawn::native::GetProcs();
 
     dawnProcSetProcs(&procs);
-    callback(device);
+    // callback(device);
 }
 #endif  // __EMSCRIPTEN__
 
@@ -181,12 +189,6 @@ static const char shaderCode[] = R"(
         return vec4<f32>(0.0, 0.502, 1.0, 1.0); // 0x80/0xff ~= 0.502
     }
 )";
-
-static wgpu::Device device;
-static wgpu::Queue queue;
-static wgpu::Buffer readbackBuffer;
-static wgpu::RenderPipeline pipeline;
-static int testsCompleted = 0;
 
 void init() {
     device.SetUncapturedErrorCallback(
@@ -297,7 +299,6 @@ void issueContentsCheck(const char* functionName,
     readbackBuffer.MapAsync(
         wgpu::MapMode::Read, 0, 4,
         [](WGPUBufferMapAsyncStatus status, void* vp_userdata) {
-            printf("\n\n%d\n\n", status);
             assert(status == WGPUBufferMapAsyncStatus_Success);
             std::unique_ptr<UserData> userdata(reinterpret_cast<UserData*>(vp_userdata));
 
@@ -485,42 +486,27 @@ void frame() {
 
 
 struct ThreadArg {
-    // device
-    // wgpu::Buffer buffer;
+    wgpu::Buffer buffer;
     uint32_t value;
-
-    // pthread_t threadId;
 
     // std::thread thread;
 };
 
-// // pthread style
-// void* threadFunc(void* vargp) {
-//     // sleep(1);
-    
-
-//     ThreadArg* arg = static_cast<ThreadArg*>(vargp);
-
-//     // uint32_t* ptr = static_cast<uint32_t*>(arg->buffer.GetMappedRange());
-//     // *ptr = arg->value;
-//     // arg->buffer.Unmap();
-
-//     // printf("Printing from Thread %d\n", arg->threadId);
-//     printf("Printing from Thread\n");
-
-//     return nullptr;
-// }
+static std::mutex deviceMutex;
 
 // std::thread style
-void threadFunc(ThreadArg arg) {
+// void threadFunc(ThreadArg arg) {
+void threadFunc(const ThreadArg& arg) {
 
-    // uint32_t* ptr = static_cast<uint32_t*>(arg->buffer.GetMappedRange());
-    // *ptr = arg->value;
-    // arg->buffer.Unmap();
+    // std::lock_guard<std::mutex> lock(deviceMutex);
+    std::scoped_lock lock(deviceMutex);
 
-    printf("Printing from Thread 0x%.8x\n", arg.value);
+    uint32_t* ptr = static_cast<uint32_t*>(arg.buffer.GetMappedRange());
 
-    return;
+    *ptr = arg.value;
+    arg.buffer.Unmap();
+
+    printf("Printing from Thread value: 0x%.8x\n", arg.value);
 }
 
 void doMultithreadingBufferTest() {
@@ -532,60 +518,41 @@ void doMultithreadingBufferTest() {
     descriptor.usage = wgpu::BufferUsage::MapRead;
     descriptor.mappedAtCreation = true;
 
-    // std::thread style
-    std::thread t0(threadFunc, std::move(ThreadArg{
-            // device.CreateBuffer(&descriptor),
+    ThreadArg threadArgs[] = {
+        ThreadArg{
+            device.CreateBuffer(&descriptor),
             0x01020304,
-        }));
-    // std::thread t1(threadFunc, std::move(ThreadArg{
-    //         device.CreateBuffer(&descriptor),
-    //         0x05060708,
-    //     }));
+        },
+        ThreadArg{
+            device.CreateBuffer(&descriptor),
+            0x05060708,
+        },
+    };
 
-    t0.join();
-    // t1.join();
+    std::vector<std::thread> threads{};
+    for (auto& arg : threadArgs) {
+        threads.emplace_back(threadFunc, std::cref(arg));
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    // for (auto& arg : threadArgs) {
+    //     threadFunc(arg);
+    // }
 
     printf("After Thread\n");
 
-
-// // Use pthread
-//     for (auto& arg : threadArgs) {
-//         pthread_create(&arg.threadId, nullptr, threadFunc, &arg);
-//     }
-
-//     for (auto& arg : threadArgs) {
-//         int rc = pthread_join(arg.threadId, nullptr);
-//         if (rc) {
-//             printf("Error:unable to join, %d\n", rc);
-//             exit(-1);
-//         }
-//     }
-//     printf("After Thread\n");
-
-//     for (int i = 0; i < 300; i++) {
-//         device.Tick();
-//     }
-//     sleep(1);
-
-
-    // for (auto& arg : threadArgs) {
-    //     issueContentsCheck(__FUNCTION__, arg.buffer, arg.value);
-    // }
-    
-    testsCompleted++;
+    for (auto& arg : threadArgs) {
+        issueContentsCheck(__FUNCTION__, arg.buffer, arg.value);
+    }
 }
-
-
-
-
-
-
 
 
 void run() {
     init();
 
-    static constexpr int kNumTests = 1;
+    static constexpr int kNumTests = 2;
     doMultithreadingBufferTest();
 
     // static constexpr int kNumTests = 5;
@@ -630,12 +597,18 @@ void run() {
 }
 
 int main() {
+    // GetDevice([](wgpu::Device dev) {
+    //     device = dev;
+    //     run();
+    // });
+    
+
+#ifdef __EMSCRIPTEN__
     GetDevice([](wgpu::Device dev) {
         device = dev;
         run();
     });
 
-#ifdef __EMSCRIPTEN__
     // The test result will be reported when the main_loop completes.
     // emscripten_exit_with_live_runtime isn't needed because the WebGPU
     // callbacks should all automatically keep the runtime alive until
@@ -645,6 +618,8 @@ int main() {
     // This code is returned when the runtime exits unless something else sets it, like exit(0).
     return 99;
 #else
+    GetDevice();
+    run();
     return 0;
 #endif
 }

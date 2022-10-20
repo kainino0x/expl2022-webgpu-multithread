@@ -38,6 +38,7 @@ if(EMSCRIPTEN)
 
         PRIVATE "SHELL:-s USE_PTHREADS=1"
         PRIVATE "SHELL:-s PTHREAD_POOL_SIZE=4"
+        # PRIVATE "SHELL:-s PROXY_TO_PTHREAD"
         )
 else()
     target_link_libraries(hello
