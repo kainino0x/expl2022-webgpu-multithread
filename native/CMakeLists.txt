@@ -7,22 +7,83 @@ set(CMAKE_CXX_STANDARD 17)
 add_compile_options(-pthread)
 
 if(NOT EMSCRIPTEN)
+    # sudo apt-get install libglfw3-dev
+    find_package(glfw3 REQUIRED)
+
+    # set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    # set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    # set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    # add_subdirectory("third_party/glfw3")
+
     set(DAWN_ENABLE_PIC        ON CACHE BOOL "Position-Independent-Code")
     set(DAWN_ENABLE_DESKTOP_GL OFF CACHE BOOL "OpenGL backend")
     set(DAWN_ENABLE_OPENGLES   OFF CACHE BOOL "OpenGL ES backend")
     set(DAWN_BUILD_EXAMPLES    OFF CACHE BOOL "Dawn examples")
     set(TINT_BUILD_SAMPLES     OFF CACHE BOOL "Tint examples")
     set(TINT_BUILD_GLSL_WRITER OFF CACHE BOOL "OpenGL SL writer")
+
+    set(DAWN_USE_X11 ON CACHE BOOL "Dawn use X11")
+    set(DAWN_GLFW_DIR "third_party/glfw3" CACHE BOOL "Dawn use GLFW")
+
     add_subdirectory("third_party/dawn" EXCLUDE_FROM_ALL)
+
+
+    # # add_subdirectory("src-native")
+    # file(GLOB NATIVE_SRC_FILES    
+    #     "src-native/*.h"
+    #     "src-native/*.cpp"
+    # )
+
+    # add_executable(hello
+    #     ${NATIVE_SRC_FILES}
+    #     "main.cpp"
+    #     )
+
+
+    set(SOURCES
+        "input.h"
+        "window.h"
+        # "window.cpp"
+
+        # # temp try
+        # "out/native/third_party/dawn/gen/src/dawn/webgpu_cpp.cpp"
+    )
+
+    add_executable(hello
+        ${SOURCES}
+        "main.cpp"
+        )
+
+    # target_include_directories(hello
+    #     PRIVATE
+    #     ${CMAKE_CURRENT_BINARY_DIR}/third_party/dawn
+    # )
+
+    target_include_directories(hello
+        PRIVATE
+        "third_party/glfw3/include"
+        "out/native/third_party/dawn/gen/src/dawn/include"
+    )
+
+    # target_sources(hello
+    #     PRIVATE
+    #     "input.h"
+    #     "window.h"
+    #     "window.cpp"
+    # )
 endif()
 
 if(EMSCRIPTEN)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g")
+
+    add_executable(hello
+        "main.cpp"
+        )
 endif()
 
-add_executable(hello
-    "main.cpp"
-    )
+# add_executable(hello
+#     "main.cpp"
+#     )
 
 if(EMSCRIPTEN)
     set_target_properties(hello PROPERTIES
@@ -42,9 +103,13 @@ if(EMSCRIPTEN)
         )
 else()
     target_link_libraries(hello
+        # dawn_public_config
         dawn_headers
+        dawncpp_headers
         dawncpp
         dawn_native
         dawn_proc
+        # librt
+        glfw
         )
 endif()

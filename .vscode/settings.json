@@ -6,6 +6,7 @@
         "numeric": "cpp",
         "ostream": "cpp",
         "sstream": "cpp",
-        "*.inc": "cpp"
+        "*.inc": "cpp",
+        "*.gen": "cpp"
     }
 }

@@ -12,13 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifdef __EMSCRIPTEN__
-#include <webgpu/webgpu_cpp.h>
-#else
-#include <dawn/webgpu_cpp.h>
-#endif
-
-#undef NDEBUG
 
 #include <algorithm>
 #include <cassert>
@@ -32,6 +25,34 @@
 
 #include <thread>
 #include <mutex>
+
+#ifdef __EMSCRIPTEN__
+#include <webgpu/webgpu_cpp.h>
+#else
+#include <dawn/webgpu_cpp.h>
+
+#include "window.h"
+
+#include <GLFW/glfw3.h>
+// #include "third_party/glfw3/include/GLFW/glfw3.h"
+
+#if defined(WIN32)
+#define GLFW_EXPOSE_NATIVE_WIN32
+#elif defined(__linux__)
+#define GLFW_EXPOSE_NATIVE_X11
+#endif
+#include <GLFW/glfw3native.h>
+// #include "GLFW/glfw3native.h"
+// #include "third_party/glfw3/include/GLFW/glfw3native.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#endif
+
+#undef NDEBUG
+
 
 static wgpu::Device device;
 static wgpu::Queue queue;
@@ -75,6 +96,265 @@ void GetDevice(void (*callback)(wgpu::Device)) {
 #include <dawn/native/DawnNative.h>
 
 static std::unique_ptr<dawn::native::Instance> instance;
+
+static wgpu::Surface surface;
+
+
+static window_t* native_window;
+
+
+// window.cpp
+
+#define UNUSED_VAR(x) ((void)(x))
+#define UNUSED_FUNCTION(x) ((void)(x))
+
+#define GET_DEFAULT_IF_ZERO(value, default_value)                              \
+  (value != NULL) ? value : default_value
+
+struct window {
+  GLFWwindow* handle;
+  struct {
+    WGPUSurface handle;
+    uint32_t width, height;
+    float dpscale;
+  } surface;
+  callbacks_t callbacks;
+  int intialized;
+  /* common data */
+  float mouse_scroll_scale_factor;
+  void* userdata;
+};
+
+static std::unique_ptr<wgpu::ChainedStruct> SurfaceDescriptor(void* display,
+                                                              void* window)
+{
+#if defined(WIN32)
+  std::unique_ptr<wgpu::SurfaceDescriptorFromWindowsHWND> desc
+    = std::make_unique<wgpu::SurfaceDescriptorFromWindowsHWND>();
+  desc->hwnd      = window;
+  desc->hinstance = GetModuleHandle(nullptr);
+  return std::move(desc);
+#elif defined(__linux__) // X11
+  std::unique_ptr<wgpu::SurfaceDescriptorFromXlibWindow> desc
+    = std::make_unique<wgpu::SurfaceDescriptorFromXlibWindow>();
+  desc->display = display;
+  desc->window  = *((uint32_t*)window);
+  return std::move(desc);
+#endif
+
+  return nullptr;
+}
+
+WGPUSurface CreateSurface(void* display, void* window)
+// WGPUSurface CreateSurface(dawn::native::Instance* instance, void* display, void* window)
+{
+  std::unique_ptr<wgpu::ChainedStruct> sd = SurfaceDescriptor(display, window);
+  wgpu::SurfaceDescriptor descriptor;
+  descriptor.nextInChain = sd.get();
+  // wgpu::Surface surface = wgpu::Instance(gpuContext.dawn_native.instance->Get())
+  //                           .CreateSurface(&descriptor);
+//   wgpu::Surface surface = wgpu::Instance(instance->Get())
+//                             .CreateSurface(&descriptor);
+//   wgpu::Surface surface = wgpu::Instance(instance->Get())
+//                             .CreateSurface(&descriptor);
+  surface = wgpu::Instance(instance->Get())
+                            .CreateSurface(&descriptor);
+  if (!surface) {
+    return nullptr;
+  }
+  WGPUSurface surf = surface.Get();
+  wgpuSurfaceReference(surf);
+  return surf;
+}
+
+/* Function prototypes */
+static void surface_update_framebuffer_size(window_t* window);
+static void glfw_window_error_callback(int error, const char* description);
+static void glfw_window_key_callback(GLFWwindow* src_window, int key,
+                                     int scancode, int action, int mods);
+static void glfw_window_cursor_position_callback(GLFWwindow* src_window,
+                                                 double xpos, double ypos);
+static void glfw_window_mouse_button_callback(GLFWwindow* src_window,
+                                              int button, int action, int mods);
+static void glfw_window_scroll_callback(GLFWwindow* src_window, double xoffset,
+                                        double yoffset);
+static void glfw_window_size_callback(GLFWwindow* src_window, int width,
+                                      int height);
+
+window_t* window_create(window_config_t* config)
+{
+  if (!config) {
+    return NULL;
+  }
+
+  window_t* window = (window_t*)malloc(sizeof(window_t));
+  memset(window, 0, sizeof(window_t));
+  window->mouse_scroll_scale_factor = 1.0f;
+
+  /* Initialize error handling */
+  glfwSetErrorCallback(glfw_window_error_callback);
+
+  /* Initialize the library */
+  if (!glfwInit()) {
+    /* Handle initialization failure */
+    fprintf(stderr, "Failed to initialize GLFW\n");
+    fflush(stderr);
+    return window;
+  }
+
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+  glfwWindowHint(GLFW_RESIZABLE, config->resizable ? GLFW_TRUE : GLFW_FALSE);
+
+  /* Create GLFW window */
+  window->handle = glfwCreateWindow(config->width, config->height,
+                                    config->title, NULL, NULL);
+
+  /* Confirm that GLFW window was created successfully */
+  if (!window->handle) {
+    glfwTerminate();
+    fprintf(stderr, "Failed to create window\n");
+    fflush(stderr);
+    return window;
+  }
+
+  surface_update_framebuffer_size(window);
+
+  /* Set user pointer to window class */
+  glfwSetWindowUserPointer(window->handle, (void*)window);
+
+  /* -- Setup callbacks -- */
+  /* clang-format off */
+  /* Key input events */
+//   glfwSetKeyCallback(window->handle, glfw_window_key_callback);
+//   /* Cursor position */
+//   glfwSetCursorPosCallback(window->handle, glfw_window_cursor_position_callback);
+//   /* Mouse button input */
+//   glfwSetMouseButtonCallback(window->handle, glfw_window_mouse_button_callback);
+//   /* Scroll input */
+//   glfwSetScrollCallback(window->handle, glfw_window_scroll_callback);
+  /* Window resize events */
+  glfwSetWindowSizeCallback(window->handle, glfw_window_size_callback);
+  /* clang-format on */
+
+  /* Change the state of the window to intialized */
+  window->intialized = 1;
+
+  return window;
+}
+
+void window_destroy(window_t* window)
+{
+  /* Cleanup window(s) */
+  if (window) {
+    if (window->handle) {
+      glfwDestroyWindow(window->handle);
+      window->handle = NULL;
+
+      /* Terminate GLFW */
+      glfwTerminate();
+    }
+
+    /* Free allocated memory */
+    free(window);
+    window = NULL;
+  }
+}
+
+int window_should_close(window_t* window)
+{
+  return glfwWindowShouldClose(window->handle);
+}
+
+void window_set_title(window_t* window, const char* title)
+{
+  glfwSetWindowTitle(window->handle, title);
+}
+
+void window_set_userdata(window_t* window, void* userdata)
+{
+  window->userdata = userdata;
+}
+
+void* window_get_userdata(window_t* window)
+{
+  return window->userdata;
+}
+
+// void* window_get_surface(dawn::native::Instance* instance, window_t* window)
+void* window_get_surface(window_t* window)
+{
+#if defined(WIN32)
+  void* display         = NULL;
+  uint32_t windowHandle = glfwGetWin32Window(window->handle);
+#elif defined(__linux__) /* X11 */
+  void* display         = glfwGetX11Display();
+  uint32_t windowHandle = glfwGetX11Window(window->handle);
+#endif
+  // window->surface.handle = wgpu_create_surface(display, &windowHandle);
+//   window->surface.handle = CreateSurface(instance, display, &windowHandle);
+  window->surface.handle = CreateSurface(display, &windowHandle);
+
+  return window->surface.handle;
+}
+
+void window_get_size(window_t* window, uint32_t* width, uint32_t* height)
+{
+  *width  = window->surface.width;
+  *height = window->surface.height;
+}
+
+void window_get_aspect_ratio(window_t* window, float* aspect_ratio)
+{
+  *aspect_ratio = (float)window->surface.width / (float)window->surface.height;
+}
+
+
+
+
+static void surface_update_framebuffer_size(window_t* window)
+{
+  if (window) {
+    float yscale = 1.0;
+    glfwGetFramebufferSize(window->handle, (int*)&(window->surface.width),
+                           (int*)&window->surface.height);
+    glfwGetWindowContentScale(window->handle, &window->surface.dpscale,
+                              &yscale);
+  }
+}
+
+static void glfw_window_size_callback(GLFWwindow* src_window, int width,
+                                      int height)
+{
+  UNUSED_VAR(width);
+  UNUSED_VAR(height);
+
+  surface_update_framebuffer_size(
+    (window_t*)glfwGetWindowUserPointer(src_window));
+}
+
+
+
+static void glfw_window_error_callback(int error, const char* description)
+{
+  fprintf(stderr, "GLFW Error occured, Error id: %i, Description: %s\n", error,
+          description);
+}
+
+
+
+
+
+
+////////////////////////
+
+#define WGPU_RELEASE_RESOURCE(Type, Name)                                      \
+  if (Name) {                                                                  \
+    wgpu##Type##Release(Name);                                                 \
+    Name = NULL;                                                               \
+  }
+
+///////////
+
 
 // Return backend select priority, smaller number means higher priority.
 int GetBackendPriority(wgpu::BackendType t) {
@@ -475,11 +755,17 @@ void frame() {
     // TODO: Read back from the canvas with drawImage() (or something) and
     // check the result.
 
+
+
 #ifdef __EMSCRIPTEN__
     emscripten_cancel_main_loop();
 
     // exit(0) (rather than emscripten_force_exit(0)) ensures there is no dangling keepalive.
     exit(0);
+#else
+    // submit_frame
+    // wgpu_swap_chain_present();
+    swapChain.Present();
 #endif
 
 }
@@ -549,6 +835,156 @@ void doMultithreadingBufferTest() {
 }
 
 
+#ifndef __EMSCRIPTEN__
+
+static const char* const WINDOW_TITLE = "WebGPU Example";
+static const uint32_t WINDOW_WIDTH    = 1280;
+static const uint32_t WINDOW_HEIGHT   = 720;
+
+// static void setup_window(wgpu_example_context_t* context,
+//                          window_config_t* windows_config)
+static void setup_window()
+{
+  char window_title[] = "WebGPU Native Window";
+    // snprintf(window_title,
+    //         strlen("WebGPU Native Window - ") + strlen(context->example_title) + 1,
+    //         "WebGPU Example - %s", context->example_title);
+    window_config_t config = {
+        .title     = GET_DEFAULT_IF_ZERO((const char*)window_title, WINDOW_TITLE),
+        .width     = kWidth,
+        .height    = kHeight,
+        // .width     = 800,
+        // .height    = 800,
+        // .width     = GET_DEFAULT_IF_ZERO(800, WINDOW_WIDTH),
+        // .height    = GET_DEFAULT_IF_ZERO(800, WINDOW_HEIGHT),
+        // .resizable = true,
+        .resizable = false,
+    };
+    native_window = window_create(&config);
+//   window_get_size(context->window, &context->window_size.width,
+//                   &context->window_size.height);
+//   window_get_aspect_ratio(context->window, &context->window_size.aspect_ratio);
+
+//   memset(&context->callbacks, 0, sizeof(callbacks_t));
+//   context->callbacks.mouse_button_callback = mouse_button_callback;
+//   context->callbacks.key_callback          = key_callback;
+//   context->callbacks.scroll_callback       = scroll_callback;
+//   context->callbacks.resize_callback       = resize_callback;
+
+//   input_set_callbacks(context->window, context->callbacks);
+}
+
+void wgpu_setup_swap_chain()
+{
+//   /* Create the swap chain */
+//   WGPUSwapChainDescriptor swap_chain_descriptor = {
+//     .usage       = WGPUTextureUsage_RenderAttachment,
+//     .format      = WGPUTextureFormat_BGRA8Unorm,
+//     .width       = kWidth,
+//     .height      = kHeight,
+//     .presentMode = WGPUPresentMode_Fifo,
+//   };
+//   if (wgpu_context->swap_chain.instance) {
+//     wgpuSwapChainRelease(wgpu_context->swap_chain.instance);
+//   }
+//   wgpu_context->swap_chain.instance = wgpuDeviceCreateSwapChain(
+//     wgpu_context->device, wgpu_context->surface.instance,
+//     &swap_chain_descriptor);
+//   ASSERT(wgpu_context->swap_chain.instance);
+
+//   /* Find a suitable depth format */
+//   wgpu_context->swap_chain.format = swap_chain_descriptor.format;
+
+    wgpu::SwapChainDescriptor scDesc{};
+        scDesc.usage = wgpu::TextureUsage::RenderAttachment;
+        scDesc.format = wgpu::TextureFormat::BGRA8Unorm;
+        scDesc.width = kWidth;
+        scDesc.height = kHeight;
+        scDesc.presentMode = wgpu::PresentMode::Fifo;
+        swapChain = device.CreateSwapChain(surface, &scDesc);
+
+    {
+        wgpu::TextureDescriptor descriptor{};
+        descriptor.usage = wgpu::TextureUsage::RenderAttachment;
+        descriptor.size = {kWidth, kHeight, 1};
+        descriptor.format = wgpu::TextureFormat::Depth32Float;
+        canvasDepthStencilView = device.CreateTexture(&descriptor).CreateView();
+    }
+}
+
+
+// void wgpu_swap_chain_present()
+// {
+//     swapChain.Present();
+// //   wgpuSwapChainPresent(instance->Get());
+
+// //   WGPU_RELEASE_RESOURCE(TextureView, swapChain)
+// }
+
+
+// static void render_loop(wgpu_example_context_t* context,
+//                         renderfunc_t* render_func,
+//                         onviewchangedfunc_t* view_changed_func,
+//                         onkeypressedfunc_t* example_on_key_pressed_func)
+static void render_loop()
+{
+//   record_t record;
+//   memset(&record, 0, sizeof(record_t));
+//   window_set_userdata(context->window, &record);
+
+//   float time_start, time_end, time_diff, fps_timer;
+//   record.last_timestamp = platform_get_time();
+  while (!window_should_close(native_window)) {
+    // time_start                      = platform_get_time();
+    // context->frame.timestamp_millis = time_start * 1000.0f;
+    // if (record.view_updated) {
+    //   record.mouse_scrolled = 0;
+    //   record.wheel_delta    = 0;
+    //   record.view_updated   = false;
+    // }
+    // input_poll_events();
+    // update_window_size(context, &record);
+    // render_func(context);
+    // render_func();
+    glfwPollEvents();
+
+    frame();
+//     ++record.frame_counter;
+//     ++context->frame.index;
+//     time_end             = platform_get_time();
+//     time_diff            = (time_end - time_start) * 1000.0f;
+//     record.frame_timer   = time_diff / 1000.0f;
+//     context->frame_timer = record.frame_timer;
+//     context->run_time += context->frame_timer;
+//     update_camera(context, &record);
+//     update_input_state(context, &record);
+//     if (example_on_key_pressed_func) {
+//       notify_key_input_state(&record, example_on_key_pressed_func);
+//     }
+//     // Convert to clamped timer value
+//     if (!context->paused) {
+//       context->timer += context->timer_speed * record.frame_timer;
+//       if (context->timer >= 1.0) {
+//         context->timer -= 1.0f;
+//       }
+//     }
+//     if (record.view_updated && view_changed_func) {
+//       view_changed_func(context);
+//     }
+//     fps_timer = (time_end - record.last_timestamp) * 1000.0f;
+//     if (fps_timer > 1000.0f) {
+//       record.last_fps   = (float)record.frame_counter * (1000.0f / fps_timer);
+//       context->last_fps = (int)(record.last_fps + 0.5f);
+//       record.frame_counter  = 0;
+//       record.last_timestamp = time_end;
+//     }
+//     context->frame_counter = record.frame_counter;
+  }
+}
+
+#endif
+
+
 void run() {
     init();
 
@@ -590,9 +1026,20 @@ void run() {
     }
     emscripten_set_main_loop(frame, 0, false);
 #else
-    while (testsCompleted < kNumTests) {
-        device.Tick();
-    }
+
+    setup_window();
+
+    // wgpu_context->surface.instance = window_get_surface(native_window);
+    window_get_surface(native_window);
+    // window_get_size(native_window, &wgpu_context->surface.width,
+    //                 &wgpu_context->surface.height);
+    wgpu_setup_swap_chain();
+
+    render_loop();
+    // while (testsCompleted < kNumTests) {
+    // // while (true) {
+    //     device.Tick();
+    // }
 #endif
 }
 
