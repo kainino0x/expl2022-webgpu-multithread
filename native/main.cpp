@@ -19,12 +19,16 @@
 #include <cstdlib>
 #include <memory>
 #include <vector>
+#include <array>
 
 #include <unistd.h>  //Header file for sleep(). man 3 sleep for details.
 // #include <pthread.h>
 
 #include <thread>
 #include <mutex>
+#include <condition_variable>
+
+#include "mat4.h"
 
 #ifdef __EMSCRIPTEN__
 #include <webgpu/webgpu_cpp.h>
@@ -53,11 +57,16 @@
 
 #undef NDEBUG
 
+#define MULTITHREADED_RENDERING
 
 static wgpu::Device device;
 static wgpu::Queue queue;
 static wgpu::Buffer readbackBuffer;
 static wgpu::RenderPipeline pipeline;
+
+static wgpu::BindGroup uniformBindGroup;
+static wgpu::Buffer uniformBuffer;
+
 static int testsCompleted = 0;
 
 #ifdef __EMSCRIPTEN__
@@ -457,7 +466,35 @@ void GetDevice() {
 }
 #endif  // __EMSCRIPTEN__
 
-static const char shaderCode[] = R"(
+// const uint32_t kDrawVertexCount = 3;
+static constexpr uint32_t kDrawVertexCount = 6;
+
+static constexpr uint32_t kQuadPerRow = 16;
+static constexpr uint32_t kNumInstances = kQuadPerRow * kQuadPerRow;
+
+static constexpr uint32_t numThreads = 1;
+// static constexpr size_t numObjectsPerThread = (kNumInstances + numThreads - 1) / numThreads;
+static constexpr size_t numObjectsPerThread = kNumInstances / numThreads;
+
+
+struct DrawObjectData {
+    Mat4 mat4;
+    // Vec3 color;
+    // uint32_t idx;
+    // vertex buffer
+    // size_t offset;
+    // matrix
+};
+
+// static constexpr uint32_t matrixElementCount = 4 * 4;  // 4x4 matrix
+// static constexpr uint32_t matrixByteSize = sizeof(float) * matrixElementCount;
+// static constexpr uint64_t uniformBufferSize = matrixByteSize * kNumInstances;
+static constexpr uint64_t uniformBufferSize = sizeof(DrawObjectData) * kNumInstances;
+
+static std::array<DrawObjectData, kNumInstances> objectData;
+
+
+static const char shaderCodeTriangle[] = R"(
     @vertex
     fn main_v(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4<f32> {
         var pos = array<vec2<f32>, 3>(
@@ -467,6 +504,53 @@ static const char shaderCode[] = R"(
     @fragment
     fn main_f() -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.502, 1.0, 1.0); // 0x80/0xff ~= 0.502
+    }
+)";
+
+// For multithreading, draw a animated quad for each draw command
+static const char shaderCode[] = R"(
+    const pos = array<vec2<f32>, 6>(
+            vec2<f32>(-0.5, -0.5), vec2<f32>(0.5, -0.5), vec2<f32>(-0.5, 0.5),
+            vec2<f32>(-0.5, 0.5), vec2<f32>(0.5, -0.5), vec2<f32>(0.5, 0.5)
+        );
+
+    struct Uniforms {
+        matrix : array<mat4x4<f32>, 256>,   // temp
+        // matrix : mat4x4<f32>,
+    }
+
+    @binding(0) @group(0) var<uniform> uniforms : Uniforms;
+
+    struct VertexOutput {
+        @builtin(position) Position: vec4<f32>,
+        @location(0) @interpolate(flat) instance_idx: u32,
+    }
+
+    struct FragmentInput {
+        @location(0) @interpolate(flat) instance_idx: u32,
+    }
+
+    @vertex
+    fn main_v(
+        @builtin(vertex_index) vid: u32,
+        @builtin(instance_index) iid: u32
+    ) -> VertexOutput {
+        var shader_io: VertexOutput;
+        // Basic matrix transform animation
+        shader_io.Position = uniforms.matrix[iid] * vec4<f32>(pos[vid], 0.0, 1.0);
+        // shader_io.Position = vec4<f32>(pos[vid], 0.0, 1.0);
+        shader_io.instance_idx = iid;
+        return shader_io;
+    }
+
+    override kQuadPerSide: f32; 
+    // override kNumInstances: f32;
+
+    @fragment
+    fn main_f(shader_io: FragmentInput) -> @location(0) vec4<f32> {
+        // return vec4<f32>(0.0, 0.502, 1.0, 1.0); // 0x80/0xff ~= 0.502
+        // return vec4<f32>(f32(shader_io.instance_idx) / kNumInstances, 0.502, 1.0, 1.0); // 0x80/0xff ~= 0.502
+        return vec4<f32>(trunc(f32(shader_io.instance_idx) / kQuadPerSide) / kQuadPerSide, 0.502, (f32(shader_io.instance_idx) % kQuadPerSide) / kQuadPerSide, 1.0);
     }
 )";
 
@@ -481,6 +565,7 @@ void init() {
     wgpu::ShaderModule shaderModule{};
     {
         wgpu::ShaderModuleWGSLDescriptor wgslDesc{};
+        // wgslDesc.source = shaderCodeTriangle;
         wgslDesc.source = shaderCode;
 
         wgpu::ShaderModuleDescriptor descriptor{};
@@ -488,20 +573,24 @@ void init() {
         shaderModule = device.CreateShaderModule(&descriptor);
     }
 
-    {
-        wgpu::BindGroupLayoutDescriptor bglDesc{};
-        auto bgl = device.CreateBindGroupLayout(&bglDesc);
-        wgpu::BindGroupDescriptor desc{};
-        desc.layout = bgl;
-        desc.entryCount = 0;
-        desc.entries = nullptr;
-        device.CreateBindGroup(&desc);
-    }
+    // wgpu::BindGroupLayout bgl;
+    // {
+    //     wgpu::BindGroupLayoutDescriptor bglDesc{};
+
+    //     bgl = device.CreateBindGroupLayout(&bglDesc);
+
+
+    //     // wgpu::BindGroupDescriptor desc{};
+    //     // desc.layout = bgl;
+    //     // desc.entryCount = 0;
+    //     // desc.entries = nullptr;
+    //     // device.CreateBindGroup(&desc);
+    // }
 
     {
-        wgpu::PipelineLayoutDescriptor pl{};
-        pl.bindGroupLayoutCount = 0;
-        pl.bindGroupLayouts = nullptr;
+        // wgpu::PipelineLayoutDescriptor pl{};
+        // pl.bindGroupLayoutCount = 0;
+        // pl.bindGroupLayouts = nullptr;
 
         wgpu::ColorTargetState colorTargetState{};
         colorTargetState.format = wgpu::TextureFormat::BGRA8Unorm;
@@ -511,12 +600,19 @@ void init() {
         fragmentState.entryPoint = "main_f";
         fragmentState.targetCount = 1;
         fragmentState.targets = &colorTargetState;
+        std::vector<wgpu::ConstantEntry> constants{
+            {nullptr, "kQuadPerSide", kQuadPerRow},
+            // {nullptr, "kNumInstances", kNumInstances},
+        };
+        fragmentState.constants = constants.data();
+        fragmentState.constantCount = constants.size();
 
         wgpu::DepthStencilState depthStencilState{};
         depthStencilState.format = wgpu::TextureFormat::Depth32Float;
 
         wgpu::RenderPipelineDescriptor descriptor{};
-        descriptor.layout = device.CreatePipelineLayout(&pl);
+        // descriptor.layout = device.CreatePipelineLayout(&pl);
+        descriptor.layout = nullptr;
         descriptor.vertex.module = shaderModule;
         descriptor.vertex.entryPoint = "main_v";
         descriptor.fragment = &fragmentState;
@@ -524,44 +620,287 @@ void init() {
         descriptor.depthStencil = &depthStencilState;
         pipeline = device.CreateRenderPipeline(&descriptor);
     }
+
+    {
+        // TODO: Replace with storage buffer
+
+        wgpu::BufferDescriptor descriptor{};
+        descriptor.size = uniformBufferSize;
+        descriptor.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+        // descriptor.mappedAtCreation = true;
+        uniformBuffer = device.CreateBuffer(&descriptor);
+
+        // float* ptr = static_cast<float*>(uniformBuffer.GetMappedRange());
+        // assert(ptr != nullptr);
+        // for (uint32_t i = 0; i < kNumInstances; i++) {
+        //     float* o = ptr + i * matrixByteSize;
+        //     for (uint32_t j = 0; j < matrixElementCount; j++) {
+        //         o[j] = 0.0;
+        //     }
+        //     o[0] = 1;
+        //     o[5] = 1;
+        //     o[10] = 1;
+        //     o[15] = 1;
+        // }
+        // uniformBuffer.Unmap();
+
+        const float quadSize = 2.0 / (float) kQuadPerRow;
+        const float quadOffsetBase = -1.0 + 0.5 * quadSize;
+
+        for (uint32_t x = 0; x < kQuadPerRow; x++) {
+            for (uint32_t y = 0; y < kQuadPerRow; y++) {
+                DrawObjectData& d = objectData[x + y * kQuadPerRow];
+
+                d.mat4 = Mat4::Translation(
+                    Vec3(
+                        (float)x * quadSize + quadOffsetBase,
+                        (float)y * quadSize + quadOffsetBase,
+                        0.0f)
+                ) * Mat4::Scale(quadSize)
+                ;
+                // d.color = Vec3((float)x / kQuadPerRow, (float)y / kQuadPerRow, 0.5);
+            }
+        }
+
+        queue.WriteBuffer(uniformBuffer, 0, objectData.data(), uniformBufferSize);
+    }
+
+    wgpu::BindGroupEntry bindEntries[] = {
+        { nullptr, 0, uniformBuffer },
+    };
+
+    {
+        wgpu::BindGroupDescriptor desc{};
+        // desc.layout = bgl;
+        desc.layout = pipeline.GetBindGroupLayout(0);
+        desc.entryCount = 1;
+        desc.entries = bindEntries;
+        uniformBindGroup = device.CreateBindGroup(&desc);
+    }
 }
+
+#if defined(MULTITHREADED_RENDERING)
+
+// ready to build command buffer
+static std::mutex frameMutex;
+static std::condition_variable frame_cv;
+static std::mutex renderMutex;
+static std::condition_variable render_cv;
+static bool frameStartRendering = false;
+static uint32_t renderthreadsFinished = 0;
+
+static bool program_running = true;
+
+
+static std::mutex deviceMutex;
+
+struct ThreadRenderData {
+    wgpu::CommandBuffer commands;
+    // wgpu::CommandBuffer& commands;
+    wgpu::RenderPassDescriptor renderpass;
+    // // Per object information (position, rotation, etc.)
+    // std::vector<DrawObjectData> objectData;
+
+    // std::vector<DrawObjectData&> objectDataRefs;
+    std::vector<size_t> objectIds;
+
+    // bool commandsBufferDone = false;
+
+    std::mutex m;
+    std::condition_variable condition;
+
+    bool rendering = false;
+};
+
+static std::array<ThreadRenderData, kNumInstances> threadData;
+static std::vector<std::thread> renderThreads;
+
+
+
+void threadRenderFunc(ThreadRenderData& data) {
+    while (program_running) {
+
+        wgpu::CommandEncoder encoder;
+        {
+            std::unique_lock lock(data.m);
+            printf("Thread waiting mutex\n");
+            
+            data.condition.wait(lock, [&]{ return data.rendering == true || !program_running; });
+            if (!program_running) {
+                break;
+            }
+            printf("Thread finish waiting frame\n");
+        }
+
+        {
+            std::scoped_lock lock(deviceMutex);
+            encoder = device.CreateCommandEncoder();
+        }
+
+        printf("Thread recording command\n");
+
+        {
+            wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
+            pass.SetPipeline(pipeline);
+            pass.SetBindGroup(0, uniformBindGroup);
+            // pass.Draw(kDrawVertexCount);
+            for (size_t id : data.objectIds) {
+                pass.Draw(kDrawVertexCount, 1, 0, id);
+            }
+            pass.End();
+        }
+        data.commands = encoder.Finish();
+
+        {
+            std::scoped_lock lock(data.m);
+            data.rendering = false;
+            printf("Thread notify\n");
+            // renderthreadsFinished++;
+            data.condition.notify_one();
+        }
+    }
+    // while(program_running) {
+
+    //     wgpu::CommandEncoder encoder;
+    //     {
+    //         std::unique_lock lock(frameMutex);
+    //         printf("Thread waiting frameMutex\n");
+    //         encoder = device.CreateCommandEncoder();
+    //         frame_cv.wait(lock, []{ return frameStartRendering == true; });
+    //         printf("Thread finish waiting frameStartRendering\n");
+    //     }
+
+    //     // wgpu::CommandEncoder encoder;
+    //     // {
+    //     //     // std::scoped_lock l(deviceMutex);
+    //     //     std::scoped_lock l(frameMutex);
+    //     //     printf("Thread device create encoder\n");
+    //     //     encoder = device.CreateCommandEncoder();
+    //     // }
+
+    //     printf("Thread recording command\n");
+
+    //     // wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    //     {
+    //         wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
+    //         pass.SetPipeline(pipeline);
+    //         pass.SetBindGroup(0, uniformBindGroup);
+    //         // pass.Draw(kDrawVertexCount);
+    //         for (size_t id : data.objectIds) {
+    //             pass.Draw(kDrawVertexCount, 1, 0, id);
+    //         }
+    //         // pass.Draw(kDrawVertexCount, data.objectIds.size(), 0, 0);
+    //         pass.End();
+    //     }
+    //     data.commands = encoder.Finish();
+
+    //     {
+    //         // std::scoped_lock lock(renderMutex);
+    //         std::scoped_lock lock(frameMutex);
+    //         printf("Thread notify\n");
+    //         renderthreadsFinished++;
+    //         render_cv.notify_one();
+    //     }
+    // }
+}
+
+void setupThreads() {
+    size_t objectId = 0;
+
+    for (uint32_t i = 0; i < numThreads; i++) {
+        for (size_t j = 0; j < numObjectsPerThread; j++) {
+            threadData[i].objectIds.push_back(objectId++);
+        }
+    }
+
+    for (uint32_t i = 0; i < numThreads; i++) {
+        renderThreads.emplace_back(threadRenderFunc, std::ref(threadData[i]));
+    }
+}
+
+void multiThreadedRender(wgpu::RenderPassDescriptor renderpass) {
+    printf("    render frame starts\n");
+
+    for (ThreadRenderData& d : threadData) {
+        d.renderpass = renderpass;
+        d.rendering = true;
+        d.condition.notify_one();
+    }
+
+    for (uint32_t i = 0; i < numThreads; i++) {
+        std::unique_lock<std::mutex> lock(threadData[i].m);
+        printf("    render waits threads %u\n", i);
+        threadData[i].condition.wait(lock, [=]{ return threadData[i].rendering == false;});
+    }
+
+    printf("    render submits commands\n\n");
+    for (ThreadRenderData& d : threadData) {
+        // queue.Submit(1, &d.commands);
+        device.GetQueue().Submit(1, &d.commands);
+    }
+
+    // printf("    render starts\n");
+    // for (uint32_t i = 0; i < numThreads; i++) {
+    //     // renderThreads
+    //     threadData[i].renderpass = renderpass;
+    // }
+
+    // {
+    //     std::scoped_lock frameLock(frameMutex);
+    //     frameStartRendering = true;
+    //     renderthreadsFinished = 0;
+    //     frame_cv.notify_all();
+    // }
+
+    // // // for (ThreadRenderData& d : threadData) {
+    // // //     d.condition.notify_one();
+    // // // }
+
+    // // std::scoped_lock frameLock(frameMutex);
+
+    // std::unique_lock lock(frameMutex);
+    // // std::unique_lock lock(renderMutex);
+    // printf("    render waits threads\n");
+    // frameStartRendering = false;
+    // // render_cv.wait(lock, []{ return renderthreadsFinished == numThreads; });
+    // render_cv.wait(lock, []{ return renderthreadsFinished == numThreads; });
+
+    // // {
+    // //     std::scoped_lock lock(frameMutex);
+    // //     frameStartRendering = false;
+    // // }
+    // // frameStartRendering = false;
+
+    // printf("    render submits commands\n\n");
+
+    // for (ThreadRenderData& d : threadData) {
+    //     queue.Submit(1, &d.commands);
+    // }
+}
+
+#else
 
 // The depth stencil attachment isn't really needed to draw the triangle
 // and doesn't really affect the render result.
 // But having one should give us a slightly better test coverage for the compile of the depth stencil descriptor.
-void render(wgpu::TextureView view, wgpu::TextureView depthStencilView) {
-    wgpu::RenderPassColorAttachment attachment{};
-    attachment.view = view;
-    attachment.loadOp = wgpu::LoadOp::Clear;
-    attachment.storeOp = wgpu::StoreOp::Store;
-    attachment.clearValue = {0, 0, 0, 1};
-
-    wgpu::RenderPassDescriptor renderpass{};
-    renderpass.colorAttachmentCount = 1;
-    renderpass.colorAttachments = &attachment;
-
-    wgpu::RenderPassDepthStencilAttachment depthStencilAttachment = {};
-    depthStencilAttachment.view = depthStencilView;
-    depthStencilAttachment.depthClearValue = 0;
-    depthStencilAttachment.depthLoadOp = wgpu::LoadOp::Clear;
-    depthStencilAttachment.depthStoreOp = wgpu::StoreOp::Store;
-
-    renderpass.depthStencilAttachment = &depthStencilAttachment;
-
+void render(wgpu::TextureView view, wgpu::TextureView depthStencilView, wgpu::RenderPassDescriptor renderpass) {
     wgpu::CommandBuffer commands;
     {
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
         {
             wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
             pass.SetPipeline(pipeline);
-            pass.Draw(3);
+            pass.SetBindGroup(0, uniformBindGroup);
+            // pass.Draw(kDrawVertexCount);
+            pass.Draw(kDrawVertexCount, kNumInstances, 0, 0);
             pass.End();
         }
         commands = encoder.Finish();
     }
-
     queue.Submit(1, &commands);
 }
+
+#endif  // MULTITHREADED_RENDERING
 
 void issueContentsCheck(const char* functionName,
         wgpu::Buffer readbackBuffer, uint32_t expectData) {
@@ -696,62 +1035,93 @@ void doCopyTestMapAsync(bool useRange) {
         }, userdata);
 }
 
-void doRenderTest() {
-    wgpu::Texture readbackTexture;
-    {
-        wgpu::TextureDescriptor descriptor{};
-        descriptor.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
-        descriptor.size = {1, 1, 1};
-        descriptor.format = wgpu::TextureFormat::BGRA8Unorm;
-        readbackTexture = device.CreateTexture(&descriptor);
-    }
-    wgpu::Texture depthTexture;
-    {
-        wgpu::TextureDescriptor descriptor{};
-        descriptor.usage = wgpu::TextureUsage::RenderAttachment;
-        descriptor.size = {1, 1, 1};
-        descriptor.format = wgpu::TextureFormat::Depth32Float;
-        depthTexture = device.CreateTexture(&descriptor);
-    }
-    render(readbackTexture.CreateView(), depthTexture.CreateView());
+// void doRenderTest() {
+//     wgpu::Texture readbackTexture;
+//     {
+//         wgpu::TextureDescriptor descriptor{};
+//         descriptor.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
+//         descriptor.size = {1, 1, 1};
+//         descriptor.format = wgpu::TextureFormat::BGRA8Unorm;
+//         readbackTexture = device.CreateTexture(&descriptor);
+//     }
+//     wgpu::Texture depthTexture;
+//     {
+//         wgpu::TextureDescriptor descriptor{};
+//         descriptor.usage = wgpu::TextureUsage::RenderAttachment;
+//         descriptor.size = {1, 1, 1};
+//         descriptor.format = wgpu::TextureFormat::Depth32Float;
+//         depthTexture = device.CreateTexture(&descriptor);
+//     }
+//     render(readbackTexture.CreateView(), depthTexture.CreateView());
 
-    {
-        wgpu::BufferDescriptor descriptor{};
-        descriptor.size = 4;
-        descriptor.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+//     {
+//         wgpu::BufferDescriptor descriptor{};
+//         descriptor.size = 4;
+//         descriptor.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
 
-        readbackBuffer = device.CreateBuffer(&descriptor);
-    }
+//         readbackBuffer = device.CreateBuffer(&descriptor);
+//     }
 
-    wgpu::CommandBuffer commands;
-    {
-        wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-        wgpu::ImageCopyTexture src{};
-        src.texture = readbackTexture;
-        src.origin = {0, 0, 0};
-        wgpu::ImageCopyBuffer dst{};
-        dst.buffer = readbackBuffer;
-        dst.layout.bytesPerRow = 256;
-        wgpu::Extent3D extent = {1, 1, 1};
-        encoder.CopyTextureToBuffer(&src, &dst, &extent);
-        commands = encoder.Finish();
-    }
-    queue.Submit(1, &commands);
+//     wgpu::CommandBuffer commands;
+//     {
+//         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+//         wgpu::ImageCopyTexture src{};
+//         src.texture = readbackTexture;
+//         src.origin = {0, 0, 0};
+//         wgpu::ImageCopyBuffer dst{};
+//         dst.buffer = readbackBuffer;
+//         dst.layout.bytesPerRow = 256;
+//         wgpu::Extent3D extent = {1, 1, 1};
+//         encoder.CopyTextureToBuffer(&src, &dst, &extent);
+//         commands = encoder.Finish();
+//     }
+//     queue.Submit(1, &commands);
 
-    // Check the color value encoded in the shader makes it out correctly.
-    static const uint32_t expectData = 0xff0080ff;
-    issueContentsCheck(__FUNCTION__, readbackBuffer, expectData);
-}
+//     // Check the color value encoded in the shader makes it out correctly.
+//     static const uint32_t expectData = 0xff0080ff;
+//     issueContentsCheck(__FUNCTION__, readbackBuffer, expectData);
+// }
 
 wgpu::SwapChain swapChain;
 wgpu::TextureView canvasDepthStencilView;
-const uint32_t kWidth = 300;
-const uint32_t kHeight = 150;
+// const uint32_t kWidth = 300;
+// const uint32_t kHeight = 150;
+const uint32_t kWidth = 512;
+const uint32_t kHeight = 512;
 
 void frame() {
-    wgpu::TextureView backbuffer = swapChain.GetCurrentTextureView();
-    render(backbuffer, canvasDepthStencilView);
 
+    // // buffer data update
+    // queue.WriteBuffer(uniformBuffer, 0, objectData.data(), uniformBufferSize);
+
+
+    // swap chain get texture view
+
+    wgpu::TextureView backbuffer = swapChain.GetCurrentTextureView();
+
+    wgpu::RenderPassColorAttachment attachment{};
+    attachment.view = backbuffer;
+    attachment.loadOp = wgpu::LoadOp::Clear;
+    attachment.storeOp = wgpu::StoreOp::Store;
+    attachment.clearValue = {0, 0, 0, 1};
+
+    wgpu::RenderPassDescriptor renderpass{};
+    renderpass.colorAttachmentCount = 1;
+    renderpass.colorAttachments = &attachment;
+
+    wgpu::RenderPassDepthStencilAttachment depthStencilAttachment = {};
+    depthStencilAttachment.view = canvasDepthStencilView;
+    depthStencilAttachment.depthClearValue = 0;
+    depthStencilAttachment.depthLoadOp = wgpu::LoadOp::Clear;
+    depthStencilAttachment.depthStoreOp = wgpu::StoreOp::Store;
+
+    renderpass.depthStencilAttachment = &depthStencilAttachment;
+
+#if defined(MULTITHREADED_RENDERING)
+    multiThreadedRender(renderpass);
+#else
+    render(backbuffer, canvasDepthStencilView, renderpass);
+#endif
     // TODO: Read back from the canvas with drawImage() (or something) and
     // check the result.
 
@@ -778,7 +1148,7 @@ struct ThreadArg {
     // std::thread thread;
 };
 
-static std::mutex deviceMutex;
+
 
 // std::thread style
 // void threadFunc(ThreadArg arg) {
@@ -922,65 +1292,65 @@ void wgpu_setup_swap_chain()
 // }
 
 
-// static void render_loop(wgpu_example_context_t* context,
-//                         renderfunc_t* render_func,
-//                         onviewchangedfunc_t* view_changed_func,
-//                         onkeypressedfunc_t* example_on_key_pressed_func)
-static void render_loop()
-{
-//   record_t record;
-//   memset(&record, 0, sizeof(record_t));
-//   window_set_userdata(context->window, &record);
+// // static void render_loop(wgpu_example_context_t* context,
+// //                         renderfunc_t* render_func,
+// //                         onviewchangedfunc_t* view_changed_func,
+// //                         onkeypressedfunc_t* example_on_key_pressed_func)
+// static void render_loop()
+// {
+// //   record_t record;
+// //   memset(&record, 0, sizeof(record_t));
+// //   window_set_userdata(context->window, &record);
 
-//   float time_start, time_end, time_diff, fps_timer;
-//   record.last_timestamp = platform_get_time();
-  while (!window_should_close(native_window)) {
-    // time_start                      = platform_get_time();
-    // context->frame.timestamp_millis = time_start * 1000.0f;
-    // if (record.view_updated) {
-    //   record.mouse_scrolled = 0;
-    //   record.wheel_delta    = 0;
-    //   record.view_updated   = false;
-    // }
-    // input_poll_events();
-    // update_window_size(context, &record);
-    // render_func(context);
-    // render_func();
-    glfwPollEvents();
+// //   float time_start, time_end, time_diff, fps_timer;
+// //   record.last_timestamp = platform_get_time();
+//   while (!window_should_close(native_window)) {
+//     // time_start                      = platform_get_time();
+//     // context->frame.timestamp_millis = time_start * 1000.0f;
+//     // if (record.view_updated) {
+//     //   record.mouse_scrolled = 0;
+//     //   record.wheel_delta    = 0;
+//     //   record.view_updated   = false;
+//     // }
+//     // input_poll_events();
+//     // update_window_size(context, &record);
+//     // render_func(context);
+//     // render_func();
+//     glfwPollEvents();
 
-    frame();
-//     ++record.frame_counter;
-//     ++context->frame.index;
-//     time_end             = platform_get_time();
-//     time_diff            = (time_end - time_start) * 1000.0f;
-//     record.frame_timer   = time_diff / 1000.0f;
-//     context->frame_timer = record.frame_timer;
-//     context->run_time += context->frame_timer;
-//     update_camera(context, &record);
-//     update_input_state(context, &record);
-//     if (example_on_key_pressed_func) {
-//       notify_key_input_state(&record, example_on_key_pressed_func);
-//     }
-//     // Convert to clamped timer value
-//     if (!context->paused) {
-//       context->timer += context->timer_speed * record.frame_timer;
-//       if (context->timer >= 1.0) {
-//         context->timer -= 1.0f;
-//       }
-//     }
-//     if (record.view_updated && view_changed_func) {
-//       view_changed_func(context);
-//     }
-//     fps_timer = (time_end - record.last_timestamp) * 1000.0f;
-//     if (fps_timer > 1000.0f) {
-//       record.last_fps   = (float)record.frame_counter * (1000.0f / fps_timer);
-//       context->last_fps = (int)(record.last_fps + 0.5f);
-//       record.frame_counter  = 0;
-//       record.last_timestamp = time_end;
-//     }
-//     context->frame_counter = record.frame_counter;
-  }
-}
+//     frame();
+// //     ++record.frame_counter;
+// //     ++context->frame.index;
+// //     time_end             = platform_get_time();
+// //     time_diff            = (time_end - time_start) * 1000.0f;
+// //     record.frame_timer   = time_diff / 1000.0f;
+// //     context->frame_timer = record.frame_timer;
+// //     context->run_time += context->frame_timer;
+// //     update_camera(context, &record);
+// //     update_input_state(context, &record);
+// //     if (example_on_key_pressed_func) {
+// //       notify_key_input_state(&record, example_on_key_pressed_func);
+// //     }
+// //     // Convert to clamped timer value
+// //     if (!context->paused) {
+// //       context->timer += context->timer_speed * record.frame_timer;
+// //       if (context->timer >= 1.0) {
+// //         context->timer -= 1.0f;
+// //       }
+// //     }
+// //     if (record.view_updated && view_changed_func) {
+// //       view_changed_func(context);
+// //     }
+// //     fps_timer = (time_end - record.last_timestamp) * 1000.0f;
+// //     if (fps_timer > 1000.0f) {
+// //       record.last_fps   = (float)record.frame_counter * (1000.0f / fps_timer);
+// //       context->last_fps = (int)(record.last_fps + 0.5f);
+// //       record.frame_counter  = 0;
+// //       record.last_timestamp = time_end;
+// //     }
+// //     context->frame_counter = record.frame_counter;
+//   }
+// }
 
 #endif
 
@@ -988,8 +1358,9 @@ static void render_loop()
 void run() {
     init();
 
-    static constexpr int kNumTests = 2;
-    doMultithreadingBufferTest();
+
+    static constexpr int kNumTests = 1;
+    // doMultithreadingBufferTest();
 
     // static constexpr int kNumTests = 5;
     // doCopyTestMappedAtCreation(false);
@@ -1035,12 +1406,38 @@ void run() {
     //                 &wgpu_context->surface.height);
     wgpu_setup_swap_chain();
 
-    render_loop();
+#if defined(MULTITHREADED_RENDERING)
+    setupThreads();
+#endif
+    // render_loop();
+
+    while (!window_should_close(native_window)) {
+
+        glfwPollEvents();
+
+        frame();
+
+        // device.Tick();
+
+        // printf("xxx\n");
+    }
+
+    // device.Tick();
+
     // while (testsCompleted < kNumTests) {
     // // while (true) {
     //     device.Tick();
     // }
 #endif
+
+    program_running = false;
+
+#if defined(MULTITHREADED_RENDERING)
+    for (std::thread& t : renderThreads) {
+        t.join();
+    }
+#endif
+
 }
 
 int main() {

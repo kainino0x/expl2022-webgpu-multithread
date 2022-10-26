@@ -41,6 +41,10 @@ if(NOT EMSCRIPTEN)
 
 
     set(SOURCES
+        "vec3.h"
+        "mat4.h"
+        "mat4.cc"
+
         "input.h"
         "window.h"
         # "window.cpp"
@@ -110,6 +114,7 @@ else()
         dawn_native
         dawn_proc
         # librt
+        webgpu_glfw
         glfw
         )
 endif()
