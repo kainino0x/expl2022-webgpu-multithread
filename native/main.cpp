@@ -680,6 +680,9 @@ void init() {
     }
 }
 
+static bool program_running = true;
+static std::mutex deviceMutex;
+
 #if defined(MULTITHREADED_RENDERING)
 
 // ready to build command buffer
@@ -689,11 +692,6 @@ static std::mutex renderMutex;
 static std::condition_variable render_cv;
 static bool frameStartRendering = false;
 static uint32_t renderthreadsFinished = 0;
-
-static bool program_running = true;
-
-
-static std::mutex deviceMutex;
 
 struct ThreadRenderData {
     // wgpu::CommandBuffer commands;
@@ -719,12 +717,10 @@ static std::array<wgpu::CommandBuffer, numThreads> commandBuffers;
 static std::vector<std::thread> renderThreads;
 
 void threadRenderFunc(ThreadRenderData& data) {
-    while (program_running) {
-
-        wgpu::CommandEncoder encoder;
+    while (program_running) {        
         {
             std::unique_lock lock(data.m);
-            printf("Thread %u waiting mutex\n", data.threadIdx);
+            // printf("Thread %u waiting mutex\n", data.threadIdx);
             
             data.condition.wait(lock, [&]{ return data.rendering == true || !program_running; });
             if (!program_running) {
@@ -733,12 +729,13 @@ void threadRenderFunc(ThreadRenderData& data) {
             // printf("Thread finish waiting frame\n");
         }
 
+        wgpu::CommandEncoder encoder;
         {
             std::scoped_lock lock(deviceMutex);
             encoder = device.CreateCommandEncoder();
         }
 
-        printf("Thread %u recording command\n", data.threadIdx);
+        // printf("Thread %u recording command\n", data.threadIdx);
 
         {
             wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
@@ -753,77 +750,14 @@ void threadRenderFunc(ThreadRenderData& data) {
         }
         commandBuffers[data.threadIdx] = encoder.Finish();
 
-        // {
-        //     std::scoped_lock lock(deviceMutex);
-        //     commandBuffers[data.threadIdx] = encoder.Finish();
-        // }
-
-        // {
-        //     std::scoped_lock lock(deviceMutex);
-        //     printf("Thread %u recording command\n", data.threadIdx);
-        //     encoder = device.CreateCommandEncoder();
-        //     wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
-        //     pass.SetPipeline(pipeline);
-        //     pass.SetBindGroup(0, uniformBindGroup);
-        //     // pass.Draw(kDrawVertexCount);
-        //     for (size_t id : data.objectIds) {
-        //         pass.Draw(kDrawVertexCount, 1, 0, id);
-        //     }
-        //     pass.End();
-        //     commandBuffers[data.threadIdx] = encoder.Finish();
-        // }
-
         {
             std::scoped_lock lock(data.m);
             data.rendering = false;
-            printf("Thread %u notify\n", data.threadIdx);
+            // printf("Thread %u notify\n", data.threadIdx);
             // renderthreadsFinished++;
             data.condition.notify_one();
         }
     }
-    // while(program_running) {
-
-    //     wgpu::CommandEncoder encoder;
-    //     {
-    //         std::unique_lock lock(frameMutex);
-    //         printf("Thread waiting frameMutex\n");
-    //         encoder = device.CreateCommandEncoder();
-    //         frame_cv.wait(lock, []{ return frameStartRendering == true; });
-    //         printf("Thread finish waiting frameStartRendering\n");
-    //     }
-
-    //     // wgpu::CommandEncoder encoder;
-    //     // {
-    //     //     // std::scoped_lock l(deviceMutex);
-    //     //     std::scoped_lock l(frameMutex);
-    //     //     printf("Thread device create encoder\n");
-    //     //     encoder = device.CreateCommandEncoder();
-    //     // }
-
-    //     printf("Thread recording command\n");
-
-    //     // wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-    //     {
-    //         wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
-    //         pass.SetPipeline(pipeline);
-    //         pass.SetBindGroup(0, uniformBindGroup);
-    //         // pass.Draw(kDrawVertexCount);
-    //         for (size_t id : data.objectIds) {
-    //             pass.Draw(kDrawVertexCount, 1, 0, id);
-    //         }
-    //         // pass.Draw(kDrawVertexCount, data.objectIds.size(), 0, 0);
-    //         pass.End();
-    //     }
-    //     data.commands = encoder.Finish();
-
-    //     {
-    //         // std::scoped_lock lock(renderMutex);
-    //         std::scoped_lock lock(frameMutex);
-    //         printf("Thread notify\n");
-    //         renderthreadsFinished++;
-    //         render_cv.notify_one();
-    //     }
-    // }
 }
 
 void setupThreads() {
@@ -841,18 +775,35 @@ void setupThreads() {
     }
 }
 
-void multiThreadedRender(wgpu::RenderPassDescriptor renderpass) {
+void multiThreadedRender(wgpu::TextureView view, wgpu::TextureView depthStencilView, wgpu::RenderPassDescriptor renderpass) {
     // printf("    render frame starts\n");
+    wgpu::RenderPassColorAttachment attachment{};
+    attachment.view = view;
+    attachment.loadOp = wgpu::LoadOp::Load;
+    attachment.storeOp = wgpu::StoreOp::Store;
+    attachment.clearValue = {0, 0, 0, 1};
+
+    wgpu::RenderPassDescriptor threadRenderpass{};
+    threadRenderpass.colorAttachmentCount = 1;
+    threadRenderpass.colorAttachments = &attachment;
+
+    wgpu::RenderPassDepthStencilAttachment depthStencilAttachment = {};
+    depthStencilAttachment.view = depthStencilView;
+    depthStencilAttachment.depthClearValue = 0;
+    depthStencilAttachment.depthLoadOp = wgpu::LoadOp::Load;
+    depthStencilAttachment.depthStoreOp = wgpu::StoreOp::Store;
+
+    threadRenderpass.depthStencilAttachment = &depthStencilAttachment;
 
     for (ThreadRenderData& d : threadData) {
-        d.renderpass = renderpass;
+        d.renderpass = threadRenderpass;
         d.rendering = true;
         d.condition.notify_one();
     }
 
     for (uint32_t i = 0; i < numThreads; i++) {
         std::unique_lock<std::mutex> lock(threadData[i].m);
-        printf("    render waits threads %u\n", i);
+        // printf("    render waits threads %u\n", i);
         threadData[i].condition.wait(lock, [=]{ return threadData[i].rendering == false;});
     }
 
@@ -863,57 +814,19 @@ void multiThreadedRender(wgpu::RenderPassDescriptor renderpass) {
     // }
     {
         std::scoped_lock lock(deviceMutex);
-        printf("    render submits commands\n\n");
-        // for (ThreadRenderData& d : threadData) {
-        //     // queue.Submit(1, &d.commands);
-        //     device.GetQueue().Submit(1, &d.commands);
-        // }
+        // printf("    render submits commands\n\n");
 
-        // std::array<const wgpu::CommandBuffer*, numThreads> commands;
-        // for (size_t i = 0; i < numThreads; i++) {
-        //     commands[i] = &threadData[i].commands;
-        // }
-        device.GetQueue().Submit(commandBuffers.size(), commandBuffers.data());
+        // clear pass
+        {
+            wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+            wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
+            pass.End();
+            wgpu::CommandBuffer clearCommand = encoder.Finish();
+            queue.Submit(1, &clearCommand);
+        }
+
+        queue.Submit(commandBuffers.size(), commandBuffers.data());
     }
-    
-
-    // printf("    render starts\n");
-    // for (uint32_t i = 0; i < numThreads; i++) {
-    //     // renderThreads
-    //     threadData[i].renderpass = renderpass;
-    // }
-
-    // {
-    //     std::scoped_lock frameLock(frameMutex);
-    //     frameStartRendering = true;
-    //     renderthreadsFinished = 0;
-    //     frame_cv.notify_all();
-    // }
-
-    // // // for (ThreadRenderData& d : threadData) {
-    // // //     d.condition.notify_one();
-    // // // }
-
-    // // std::scoped_lock frameLock(frameMutex);
-
-    // std::unique_lock lock(frameMutex);
-    // // std::unique_lock lock(renderMutex);
-    // printf("    render waits threads\n");
-    // frameStartRendering = false;
-    // // render_cv.wait(lock, []{ return renderthreadsFinished == numThreads; });
-    // render_cv.wait(lock, []{ return renderthreadsFinished == numThreads; });
-
-    // // {
-    // //     std::scoped_lock lock(frameMutex);
-    // //     frameStartRendering = false;
-    // // }
-    // // frameStartRendering = false;
-
-    // printf("    render submits commands\n\n");
-
-    // for (ThreadRenderData& d : threadData) {
-    //     queue.Submit(1, &d.commands);
-    // }
 }
 
 #else
@@ -922,6 +835,48 @@ void multiThreadedRender(wgpu::RenderPassDescriptor renderpass) {
 // and doesn't really affect the render result.
 // But having one should give us a slightly better test coverage for the compile of the depth stencil descriptor.
 void render(wgpu::TextureView view, wgpu::TextureView depthStencilView, wgpu::RenderPassDescriptor renderpass) {
+    
+    // // Try submitting multiple command buffer
+    // std::array<wgpu::CommandBuffer, 2> commands;
+    // {
+    //     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    //     {
+    //         wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
+    //         pass.SetPipeline(pipeline);
+    //         pass.SetBindGroup(0, uniformBindGroup);
+    //         // for (size_t i = 0; i < kNumInstances / 2; i++) {
+    //         //     pass.Draw(kDrawVertexCount, 1, 0, i);
+    //         // }
+    //         // for (size_t i = kNumInstances / 2; i < kNumInstances; i++) {
+    //         //     pass.Draw(kDrawVertexCount, 1, 0, i);
+    //         // }
+    //         // pass.Draw(kDrawVertexCount, 1, 0, 127);
+    //         pass.Draw(kDrawVertexCount, 1, 0, 255);
+    //         // pass.Draw(kDrawVertexCount, 1, 0, 0);
+    //         pass.End();
+    //     }
+    //     commands[0] = encoder.Finish();
+    // }
+    // {
+    //     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    //     {
+    //         wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
+    //         pass.SetPipeline(pipeline);
+    //         pass.SetBindGroup(0, uniformBindGroup);
+    //         // for (size_t i = kNumInstances / 2; i < kNumInstances; i++) {
+    //         //     pass.Draw(kDrawVertexCount, 1, 0, i);
+    //         // }
+    //         // for (size_t i = 0; i < kNumInstances / 2; i++) {
+    //         //     pass.Draw(kDrawVertexCount, 1, 0, i);
+    //         // }
+    //         // pass.Draw(kDrawVertexCount, 1, 0, 255);
+    //         // pass.Draw(kDrawVertexCount, 1, 0, 127);
+    //         pass.Draw(kDrawVertexCount, 1, 0, 3);
+    //         pass.End();
+    //     }
+    //     commands[1] = encoder.Finish();
+    // }
+    // queue.Submit(commands.size(), commands.data());
     wgpu::CommandBuffer commands;
     {
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
@@ -1162,7 +1117,7 @@ void frame() {
     renderpass.depthStencilAttachment = &depthStencilAttachment;
 
 #if defined(MULTITHREADED_RENDERING)
-    multiThreadedRender(renderpass);
+    multiThreadedRender(backbuffer, canvasDepthStencilView, renderpass);
 #else
     render(backbuffer, canvasDepthStencilView, renderpass);
 #endif
