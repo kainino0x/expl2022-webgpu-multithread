@@ -472,8 +472,9 @@ static constexpr uint32_t kDrawVertexCount = 6;
 static constexpr uint32_t kQuadPerRow = 16;
 static constexpr uint32_t kNumInstances = kQuadPerRow * kQuadPerRow;
 
-static constexpr uint32_t numThreads = 1;
-// static constexpr uint32_t numThreads = 2;
+// static constexpr uint32_t numThreads = 1;
+static constexpr uint32_t numThreads = 2;
+// static constexpr uint32_t numThreads = 4;
 // static constexpr size_t numObjectsPerThread = (kNumInstances + numThreads - 1) / numThreads;
 static constexpr size_t numObjectsPerThread = kNumInstances / numThreads;
 
@@ -657,8 +658,7 @@ void init() {
                         (float)x * quadSize + quadOffsetBase,
                         (float)y * quadSize + quadOffsetBase,
                         0.0f)
-                ) * Mat4::Scale(quadSize)
-                ;
+                ) * Mat4::Scale(quadSize);
                 // d.color = Vec3((float)x / kQuadPerRow, (float)y / kQuadPerRow, 0.5);
             }
         }
@@ -696,7 +696,7 @@ static bool program_running = true;
 static std::mutex deviceMutex;
 
 struct ThreadRenderData {
-    wgpu::CommandBuffer commands;
+    // wgpu::CommandBuffer commands;
     // wgpu::CommandBuffer& commands;
     wgpu::RenderPassDescriptor renderpass;
     // // Per object information (position, rotation, etc.)
@@ -706,6 +706,7 @@ struct ThreadRenderData {
     std::vector<size_t> objectIds;
 
     // bool commandsBufferDone = false;
+    uint32_t threadIdx;
 
     std::mutex m;
     std::condition_variable condition;
@@ -714,6 +715,7 @@ struct ThreadRenderData {
 };
 
 static std::array<ThreadRenderData, numThreads> threadData;
+static std::array<wgpu::CommandBuffer, numThreads> commandBuffers;
 static std::vector<std::thread> renderThreads;
 
 void threadRenderFunc(ThreadRenderData& data) {
@@ -722,7 +724,7 @@ void threadRenderFunc(ThreadRenderData& data) {
         wgpu::CommandEncoder encoder;
         {
             std::unique_lock lock(data.m);
-            printf("Thread waiting mutex\n");
+            printf("Thread %u waiting mutex\n", data.threadIdx);
             
             data.condition.wait(lock, [&]{ return data.rendering == true || !program_running; });
             if (!program_running) {
@@ -736,7 +738,7 @@ void threadRenderFunc(ThreadRenderData& data) {
             encoder = device.CreateCommandEncoder();
         }
 
-        printf("Thread recording command\n");
+        printf("Thread %u recording command\n", data.threadIdx);
 
         {
             wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
@@ -746,18 +748,19 @@ void threadRenderFunc(ThreadRenderData& data) {
             for (size_t id : data.objectIds) {
                 pass.Draw(kDrawVertexCount, 1, 0, id);
             }
+            // printf("%lu\n", data.objectIds.back());
             pass.End();
         }
-        data.commands = encoder.Finish();
+        commandBuffers[data.threadIdx] = encoder.Finish();
 
         // {
         //     std::scoped_lock lock(deviceMutex);
-        //     data.commands = encoder.Finish();
+        //     commandBuffers[data.threadIdx] = encoder.Finish();
         // }
 
         // {
         //     std::scoped_lock lock(deviceMutex);
-        //     printf("Thread recording command\n");
+        //     printf("Thread %u recording command\n", data.threadIdx);
         //     encoder = device.CreateCommandEncoder();
         //     wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
         //     pass.SetPipeline(pipeline);
@@ -767,13 +770,13 @@ void threadRenderFunc(ThreadRenderData& data) {
         //         pass.Draw(kDrawVertexCount, 1, 0, id);
         //     }
         //     pass.End();
-        //     data.commands = encoder.Finish();
+        //     commandBuffers[data.threadIdx] = encoder.Finish();
         // }
 
         {
             std::scoped_lock lock(data.m);
             data.rendering = false;
-            printf("Thread notify\n");
+            printf("Thread %u notify\n", data.threadIdx);
             // renderthreadsFinished++;
             data.condition.notify_one();
         }
@@ -827,6 +830,7 @@ void setupThreads() {
     size_t objectId = 0;
 
     for (uint32_t i = 0; i < numThreads; i++) {
+        threadData[i].threadIdx = i;
         for (size_t j = 0; j < numObjectsPerThread; j++) {
             threadData[i].objectIds.push_back(objectId++);
         }
@@ -860,10 +864,16 @@ void multiThreadedRender(wgpu::RenderPassDescriptor renderpass) {
     {
         std::scoped_lock lock(deviceMutex);
         printf("    render submits commands\n\n");
-        for (ThreadRenderData& d : threadData) {
-            // queue.Submit(1, &d.commands);
-            device.GetQueue().Submit(1, &d.commands);
-        }
+        // for (ThreadRenderData& d : threadData) {
+        //     // queue.Submit(1, &d.commands);
+        //     device.GetQueue().Submit(1, &d.commands);
+        // }
+
+        // std::array<const wgpu::CommandBuffer*, numThreads> commands;
+        // for (size_t i = 0; i < numThreads; i++) {
+        //     commands[i] = &threadData[i].commands;
+        // }
+        device.GetQueue().Submit(commandBuffers.size(), commandBuffers.data());
     }
     
 
