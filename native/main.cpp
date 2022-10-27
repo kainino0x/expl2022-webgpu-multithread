@@ -473,6 +473,7 @@ static constexpr uint32_t kQuadPerRow = 16;
 static constexpr uint32_t kNumInstances = kQuadPerRow * kQuadPerRow;
 
 static constexpr uint32_t numThreads = 1;
+// static constexpr uint32_t numThreads = 2;
 // static constexpr size_t numObjectsPerThread = (kNumInstances + numThreads - 1) / numThreads;
 static constexpr size_t numObjectsPerThread = kNumInstances / numThreads;
 
@@ -712,10 +713,8 @@ struct ThreadRenderData {
     bool rendering = false;
 };
 
-static std::array<ThreadRenderData, kNumInstances> threadData;
+static std::array<ThreadRenderData, numThreads> threadData;
 static std::vector<std::thread> renderThreads;
-
-
 
 void threadRenderFunc(ThreadRenderData& data) {
     while (program_running) {
@@ -729,7 +728,7 @@ void threadRenderFunc(ThreadRenderData& data) {
             if (!program_running) {
                 break;
             }
-            printf("Thread finish waiting frame\n");
+            // printf("Thread finish waiting frame\n");
         }
 
         {
@@ -750,6 +749,26 @@ void threadRenderFunc(ThreadRenderData& data) {
             pass.End();
         }
         data.commands = encoder.Finish();
+
+        // {
+        //     std::scoped_lock lock(deviceMutex);
+        //     data.commands = encoder.Finish();
+        // }
+
+        // {
+        //     std::scoped_lock lock(deviceMutex);
+        //     printf("Thread recording command\n");
+        //     encoder = device.CreateCommandEncoder();
+        //     wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
+        //     pass.SetPipeline(pipeline);
+        //     pass.SetBindGroup(0, uniformBindGroup);
+        //     // pass.Draw(kDrawVertexCount);
+        //     for (size_t id : data.objectIds) {
+        //         pass.Draw(kDrawVertexCount, 1, 0, id);
+        //     }
+        //     pass.End();
+        //     data.commands = encoder.Finish();
+        // }
 
         {
             std::scoped_lock lock(data.m);
@@ -819,7 +838,7 @@ void setupThreads() {
 }
 
 void multiThreadedRender(wgpu::RenderPassDescriptor renderpass) {
-    printf("    render frame starts\n");
+    // printf("    render frame starts\n");
 
     for (ThreadRenderData& d : threadData) {
         d.renderpass = renderpass;
@@ -833,11 +852,20 @@ void multiThreadedRender(wgpu::RenderPassDescriptor renderpass) {
         threadData[i].condition.wait(lock, [=]{ return threadData[i].rendering == false;});
     }
 
-    printf("    render submits commands\n\n");
-    for (ThreadRenderData& d : threadData) {
-        // queue.Submit(1, &d.commands);
-        device.GetQueue().Submit(1, &d.commands);
+    // printf("    render submits commands\n\n");
+    // for (ThreadRenderData& d : threadData) {
+    //     queue.Submit(1, &d.commands);
+    //     // device.GetQueue().Submit(1, &d.commands);
+    // }
+    {
+        std::scoped_lock lock(deviceMutex);
+        printf("    render submits commands\n\n");
+        for (ThreadRenderData& d : threadData) {
+            // queue.Submit(1, &d.commands);
+            device.GetQueue().Submit(1, &d.commands);
+        }
     }
+    
 
     // printf("    render starts\n");
     // for (uint32_t i = 0; i < numThreads; i++) {
@@ -1097,6 +1125,12 @@ void frame() {
 
     // swap chain get texture view
 
+    // wgpu::TextureView backbuffer;
+    // {
+    //     std::scoped_lock lock(deviceMutex);
+    //     backbuffer = swapChain.GetCurrentTextureView();
+    // }
+    
     wgpu::TextureView backbuffer = swapChain.GetCurrentTextureView();
 
     wgpu::RenderPassColorAttachment attachment{};
@@ -1136,6 +1170,11 @@ void frame() {
     // submit_frame
     // wgpu_swap_chain_present();
     swapChain.Present();
+
+    // {
+    //     std::scoped_lock lock(deviceMutex);
+    //     swapChain.Present();
+    // }
 #endif
 
 }
