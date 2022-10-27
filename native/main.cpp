@@ -496,6 +496,19 @@ static constexpr uint64_t uniformBufferSize = sizeof(DrawObjectData) * kNumInsta
 static std::array<DrawObjectData, kNumInstances> objectData;
 
 
+static float focusPointX = 0.0;
+static float focusPointY = 0.0;
+
+static uint32_t frameTime = 0;
+
+bool ifObjectShouldDraw(size_t objectId) {
+    size_t x = objectId % kQuadPerRow;
+    size_t y = objectId / kQuadPerRow;
+
+    return abs((float)x - focusPointX) + abs((float)y - focusPointY) < 6.0 + 3.0 * cosf((float)frameTime * 0.04);
+}
+
+
 static const char shaderCodeTriangle[] = R"(
     @vertex
     fn main_v(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4<f32> {
@@ -741,9 +754,16 @@ void threadRenderFunc(ThreadRenderData& data) {
             wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
             pass.SetPipeline(pipeline);
             pass.SetBindGroup(0, uniformBindGroup);
-            // pass.Draw(kDrawVertexCount);
+
             for (size_t id : data.objectIds) {
-                pass.Draw(kDrawVertexCount, 1, 0, id);
+
+                // Decide if should draw object
+                // Mimic culling, LOD, etc.
+                if (ifObjectShouldDraw(id)) {
+                    pass.Draw(kDrawVertexCount, 1, 0, id);
+                }
+
+                
             }
             // printf("%lu\n", data.objectIds.back());
             pass.End();
@@ -1142,6 +1162,12 @@ void frame() {
     // }
 #endif
 
+    float t = (float)frameTime * 0.01;
+
+    focusPointX = (cosf(t) + 1.0) * 0.5 * (float)kQuadPerRow;
+    focusPointY = (sinf(2.7 * t) + 1.0) * 0.5 * (float)kQuadPerRow;
+
+    frameTime++;
 }
 
 
