@@ -1472,6 +1472,9 @@ void run() {
     program_running = false;
 
 #if defined(MULTITHREADED_RENDERING)
+    for (ThreadRenderData& d : threadData) {
+        d.condition.notify_one();
+    }
     for (std::thread& t : renderThreads) {
         t.join();
     }
