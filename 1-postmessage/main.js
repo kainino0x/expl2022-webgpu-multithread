@@ -5,6 +5,8 @@ const device = await adapter.requestDevice();
 
 const buffer = device.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
 
+console.log('sending', device, buffer, buffer.size);
+
 worker.onmessage = async () => {
   await buffer.mapAsync(GPUMapMode.READ);
   const mapped = buffer.getMappedRange();
@@ -13,8 +15,8 @@ worker.onmessage = async () => {
 try {
   worker.postMessage({ device, buffer });
 } catch (ex) {
-  console.log('postMessage with WebGPU objects failed');
-  worker.postMessage(null);
+  worker.postMessage('unavailable');
+  throw ex;
 } finally {
   device.queue.writeBuffer(buffer, 4, new Uint32Array([77777]));
 }
