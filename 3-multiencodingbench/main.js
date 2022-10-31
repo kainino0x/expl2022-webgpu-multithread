@@ -6,10 +6,9 @@ console.log('inserting into table', device);
 table.insert(1, device);
 
 const workerCount = parseInt(new URLSearchParams(window.location.search).get('workerCount')) || 1;
-console.log(`Running with ${workerCount} workers.`);
+console.log(`Running with up to ${workerCount} workers.`);
 
 const dispatchCount = 100000;
-const dispatchCountPerWorker = dispatchCount / workerCount;
 
 let workers = new Array(workerCount);
 console.log('sending', table);
@@ -20,34 +19,78 @@ for (let i = 0; i < workerCount; ++i) {
 
 const trialCount = 500;
 let trialTimes = [];
+let encodingTimes = [];
 let workerTimes = [];
 
-function trial() {
+function trial(numWorkers) {
+  const dispatchCountPerWorker = dispatchCount / numWorkers;
+
   return new Promise(resolve => {
     let start = performance.now();
     let counts = 0;
     function onmessage(ev) {
       workerTimes.push(ev.data);
       counts += 1;
-      if (counts % workerCount == 0) {
-        trialTimes.push(performance.now() - start);
-        resolve();
+      if (counts % numWorkers == 0) {
+        encodingTimes.push(performance.now() - start);
+
+        // force a GPU flush
+        device.queue.submit([]);
+        device.queue.onSubmittedWorkDone().then(() => {
+          trialTimes.push(performance.now() - start);
+          resolve();
+        });
       }
     };
-    for (let i = 0; i < workerCount; ++i) {
+    for (let i = 0; i < numWorkers; ++i) {
       workers[i].onmessage = onmessage;
       workers[i].postMessage({ dispatchCountPerWorker });
     }
   });
 }
 
-for (let i = 0; i < trialCount; ++i) {
-  await trial();
+console.log('warming up...');
+await trial(1);
+await trial(workerCount);
+
+console.log('starting');
+
+const titles = [
+  'workers',
+  'median per-thread encoding time', 'median encoding time', 'median wall time',
+  'average per-thread encoding time', 'average encoding time', 'average wall time'
+];
+let output = '';
+output += titles.join('\t');
+console.log(output);
+
+const allResults = [];
+// Test all worker counts from 1->workerCount
+for (let numWorkers = 1; numWorkers <= workerCount; ++numWorkers) {
+  trialTimes = [];
+  encodingTimes = [];
+  workerTimes = [];
+
+  for (let i = 0; i < trialCount; ++i) {
+    await trial(numWorkers);
+  }
+
+  workerTimes.sort();
+  encodingTimes.sort();
+  trialTimes.sort();
+  const values = [
+    numWorkers,
+    workerTimes[workerTimes.length / 2],
+    encodingTimes[encodingTimes.length / 2],
+    trialTimes[trialTimes.length / 2],
+    workerTimes.reduce((a, b) => a + b, 0) / workerTimes.length,
+    encodingTimes.reduce((a, b) => a + b, 0) / encodingTimes.length,
+    trialTimes.reduce((a, b) => a + b, 0) / trialTimes.length,
+  ];
+  let line = values.join('\t');
+  console.log(line);
+  output += '\n' + line;
 }
 
-trialTimes.sort();
-workerTimes.sort();
-console.log('median thread time', trialTimes[trialTimes.length / 2]);
-console.log('median wall time', workerTimes[workerTimes.length / 2]);
-console.log('average thread time', trialTimes.reduce((a, b) => a + b, 0) / trialTimes.length);
-console.log('average wall time', workerTimes.reduce((a, b) => a + b, 0) / workerTimes.length);
+console.log('\n\n==============================\n\n' + output);
+
