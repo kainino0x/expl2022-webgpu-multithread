@@ -1,7 +1,7 @@
-const kNumWorkers = 1;
-
-// 🔎 Check out the blog post:
+// Creadit: many code based on
 // https://alain.xyz/blog/raw-webgpu
+
+const kNumWorkers = 2;
 
 // 🟦 Shaders
 const vertWgsl = `
@@ -28,11 +28,18 @@ fn main(@location(0) inColor: vec3<f32>) -> @location(0) vec4<f32> {
 
 // 🌅 Renderer
 // 📈 Position Vertex Buffer Data
-const positions = new Float32Array([
-    1.0, -1.0, 0.0,
-   -1.0, -1.0, 0.0,
-    0.0,  1.0, 0.0
-]);
+const positions = [
+  new Float32Array([
+    0.3 - 0.5, -0.3, 0.0,
+   -0.3 - 0.5, -0.3, 0.0,
+    0.0 - 0.5,  0.3, 0.0
+  ]),
+  new Float32Array([
+    0.3 + 0.5, -0.3, 0.0,
+   -0.3 + 0.5, -0.3, 0.0,
+    0.0 + 0.5,  0.3, 0.0
+  ]),
+];
 
 // 🎨 Color Vertex Buffer Data
 const colors = new Float32Array([
@@ -50,34 +57,7 @@ class Renderer {
 
         this.workers = [];
 
-
-        // temp try
-        this.isCommandBufferReady = false;
-
-        this.sentMsg = false;
-
-        // // ⚙️ API Data Structures
-        // adapter: GPUAdapter;
-        // device: GPUDevice;
-        // queue: GPUQueue;
-
-        // // 🎞️ Frame Backings
-        // context: GPUCanvasContext;
-        // colorTexture: GPUTexture;
-        // colorTextureView: GPUTextureView;
-        // depthTexture: GPUTexture;
-        // depthTextureView: GPUTextureView;
-
-        // // 🔺 Resources
-        // positionBuffer: GPUBuffer;
-        // colorBuffer: GPUBuffer;
-        // indexBuffer: GPUBuffer;
-        // vertModule: GPUShaderModule;
-        // fragModule: GPUShaderModule;
-        // pipeline: GPURenderPipeline;
-
-        // commandEncoder: GPUCommandEncoder;
-        // passEncoder: GPURenderPassEncoder;
+        this.numFinishedWorker = 0;
     }
 
     // 🏎️ Start the rendering engine
@@ -141,7 +121,10 @@ class Renderer {
             return buffer;
         };
 
-        this.positionBuffer = createBuffer(positions, GPUBufferUsage.VERTEX);
+        this.positionBuffers = [
+          createBuffer(positions[0], GPUBufferUsage.VERTEX),
+          createBuffer(positions[1], GPUBufferUsage.VERTEX),
+        ];
         this.colorBuffer = createBuffer(colors, GPUBufferUsage.VERTEX);
         this.indexBuffer = createBuffer(indices, GPUBufferUsage.INDEX);
 
@@ -180,13 +163,6 @@ class Renderer {
             stepMode: 'vertex'
         };
 
-        // // 🌑 Depth
-        // const depthStencil = {
-        //     depthWriteEnabled: true,
-        //     depthCompare: 'less',
-        //     format: 'depth24plus-stencil8'
-        // };
-
         // 🦄 Uniform Data
         const pipelineLayoutDesc = { bindGroupLayouts: [] };
         const layout = this.device.createPipelineLayout(pipelineLayoutDesc);
@@ -224,42 +200,31 @@ class Renderer {
             fragment,
 
             primitive,
-            // depthStencil
         };
         this.pipeline = this.device.createRenderPipeline(pipelineDesc);
 
 
-
-
-
         // worker setup
         const table = new GPUSharedTable();
-        // console.log('inserting into table', device, buffer);
         table.insert(1, this.device);
         table.insert(2, this.pipeline);
-        table.insert(3, this.positionBuffer);
+        table.insert(20, this.positionBuffers[0]);
+        table.insert(21, this.positionBuffers[1]);
         table.insert(4, this.colorBuffer);
         table.insert(5, this.indexBuffer);
         this.table = table;
 
         for (let i = 0; i < kNumWorkers; i++) {
           const worker = new Worker('./worker.js');
-          // worker.postMessage(this.table);
           worker.postMessage({
+            idx: i,
             width: this.canvas.width,
             height: this.canvas.height,
             table: this.table
           });
 
           worker.onmessage = async () => {
-            // temp for 1 worker
-            // console.log("main: received worker done");
-            // console.log(this.table.get(10 + i));
-
-            // this.queue.submit([this.table.get(10 + i)]);
-            // this.device.queue.submit([this.table.get(10)]);
-
-            this.isCommandBufferReady = true;
+            this.numFinishedWorker++;
           };
 
           this.workers.push(worker);
@@ -281,66 +246,57 @@ class Renderer {
             };
             this.context.configure(canvasConfig);
         }
-
-        // const depthTextureDesc = {
-        //     size: [this.canvas.width, this.canvas.height, 1],
-        //     dimension: '2d',
-        //     format: 'depth24plus-stencil8',
-        //     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC
-        // };
-
-        // this.depthTexture = this.device.createTexture(depthTextureDesc);
-        // this.depthTextureView = this.depthTexture.createView();
     }
 
 
     render = () => {
-        // // ⏭ Acquire next image from context
-        // this.colorTexture = this.context.getCurrentTexture();
-        // this.colorTextureView = this.colorTexture.createView({label: 'xxx'});
+        // ⏭ Acquire next image from context
+        this.colorTexture = this.context.getCurrentTexture();
+        this.colorTextureView = this.colorTexture.createView();
 
-        // console.log('render');
+        // Workers build render bundles
+        for (let i = 0; i < kNumWorkers; i++) {
+          this.workers[i].postMessage('frame');
+        }
 
-        // console.log('insert colorTextureView');
-        // this.table.remove(6);
-        // this.table.insert(6, this.colorTextureView);
+        const colorAttachment = {
+            view: this.colorTextureView,
+            clearValue: { r: 0, g: 0, b: 0, a: 1 },
+            loadOp: 'clear',
+            storeOp: 'store'
+        };  
+      
+        const renderPassDesc = {
+            colorAttachments: [colorAttachment],
+        };
 
+        const commandEncoder = this.device.createCommandEncoder();
+      
+        // 🖌️ Encode drawing commands
+        const passEncoder = commandEncoder.beginRenderPass(renderPassDesc);
+        passEncoder.setPipeline(this.pipeline);
+        passEncoder.setViewport(
+            0,
+            0,
+            this.canvas.width,
+            this.canvas.height,
+            0,
+            1
+        );
 
-
-        // 📦 Write and submit commands to queue
-
-        // if (this.isCommandBufferReady === false) {
-        if (this.sentMsg === false) {
-          this.sentMsg = true;
-          this.colorTexture = this.context.getCurrentTexture();
-          this.colorTextureView = this.colorTexture.createView({label: 'xxx'});
-          
-          this.table.insert(6, this.colorTextureView);
-          console.log(this.colorTextureView);
-
-          for (let i = 0; i < this.workers.length; i++) {
-            // temp
-            // this.table.remove(20 + i);
-            // this.table.insert(20 + i, this.device.createCommandEncoder());
-            this.workers[i].postMessage('frame');
+        if (this.numFinishedWorker >= kNumWorkers) {
+          // console.log('submit render bundles');
+          this.numFinishedWorker = 0;
+          const bundles = new Array(kNumWorkers);
+          for (let i = 0; i < kNumWorkers; i++) {
+            bundles[i] = this.table.get(10 + i);
           }
+          passEncoder.executeBundles(bundles);
         }
 
-        if (this.isCommandBufferReady) {
-          // temp 1 thread
+        passEncoder.end();
 
-          // console.log(this.table.get(4));
-
-          const commandBuffer = this.table.get(10);
-          console.log(commandBuffer);
-          
-          console.log(this.colorTextureView);
-          console.log(this.table.get(6));
-
-          this.queue.submit([commandBuffer]);
-
-          this.isCommandBufferReady = false;
-        }
+        this.device.queue.submit([commandEncoder.finish()]);
 
         // ➿ Refresh canvas
         requestAnimationFrame(this.render);
