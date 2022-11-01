@@ -24,7 +24,8 @@ class WorkerRenderer {
         colorAttachments: [colorAttachment],
     };
   
-    const commandEncoder = this.device.createCommandEncoder();
+    // const commandEncoder = this.device.createCommandEncoder();
+    const commandEncoder = this.table.get(20);
   
     // 🖌️ Encode drawing commands
     const passEncoder = commandEncoder.beginRenderPass(renderPassDesc);
@@ -56,7 +57,7 @@ class WorkerRenderer {
 
     // return commandEncoder.finish();
 
-    this.table.remove(10);
+    // this.table.remove(10);
     this.table.insert(10, commandEncoder.finish());
   }
 }

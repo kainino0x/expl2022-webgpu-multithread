@@ -291,7 +291,7 @@ class Renderer {
         // console.log('render');
 
         console.log('insert colorTextureView');
-        this.table.remove(6);
+        // this.table.remove(6);
         this.table.insert(6, this.colorTextureView);
 
 
@@ -300,6 +300,9 @@ class Renderer {
 
 
         for (let i = 0; i < this.workers.length; i++) {
+          // temp
+          // this.table.remove(20 + i);
+          this.table.insert(20 + i, this.device.createCommandEncoder());
           this.workers[i].postMessage('frame');
         }
 
