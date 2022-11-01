@@ -16,6 +16,8 @@ worker.onmessage = async () => {
   await buffer.mapAsync(GPUMapMode.READ);
   const mapped = buffer.getMappedRange();
   console.log(new Uint32Array(mapped));
+
+  console.log(table.get(2));
 };
 
 worker.postMessage({ table });

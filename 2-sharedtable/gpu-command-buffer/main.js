@@ -50,6 +50,12 @@ class Renderer {
 
         this.workers = [];
 
+
+        // temp try
+        this.isCommandBufferReady = false;
+
+        this.sentMsg = false;
+
         // // ⚙️ API Data Structures
         // adapter: GPUAdapter;
         // device: GPUDevice;
@@ -247,8 +253,13 @@ class Renderer {
 
           worker.onmessage = async () => {
             // temp for 1 worker
-            console.log("main: received worker done");
-            this.queue.submit([this.table.get(10 + i)]);
+            // console.log("main: received worker done");
+            // console.log(this.table.get(10 + i));
+
+            // this.queue.submit([this.table.get(10 + i)]);
+            // this.device.queue.submit([this.table.get(10)]);
+
+            this.isCommandBufferReady = true;
           };
 
           this.workers.push(worker);
@@ -284,26 +295,51 @@ class Renderer {
 
 
     render = () => {
-        // ⏭ Acquire next image from context
-        this.colorTexture = this.context.getCurrentTexture();
-        this.colorTextureView = this.colorTexture.createView();
+        // // ⏭ Acquire next image from context
+        // this.colorTexture = this.context.getCurrentTexture();
+        // this.colorTextureView = this.colorTexture.createView({label: 'xxx'});
 
         // console.log('render');
 
-        console.log('insert colorTextureView');
+        // console.log('insert colorTextureView');
         // this.table.remove(6);
-        this.table.insert(6, this.colorTextureView);
+        // this.table.insert(6, this.colorTextureView);
 
 
 
         // 📦 Write and submit commands to queue
 
+        // if (this.isCommandBufferReady === false) {
+        if (this.sentMsg === false) {
+          this.sentMsg = true;
+          this.colorTexture = this.context.getCurrentTexture();
+          this.colorTextureView = this.colorTexture.createView({label: 'xxx'});
+          
+          this.table.insert(6, this.colorTextureView);
+          console.log(this.colorTextureView);
 
-        for (let i = 0; i < this.workers.length; i++) {
-          // temp
-          // this.table.remove(20 + i);
-          this.table.insert(20 + i, this.device.createCommandEncoder());
-          this.workers[i].postMessage('frame');
+          for (let i = 0; i < this.workers.length; i++) {
+            // temp
+            // this.table.remove(20 + i);
+            // this.table.insert(20 + i, this.device.createCommandEncoder());
+            this.workers[i].postMessage('frame');
+          }
+        }
+
+        if (this.isCommandBufferReady) {
+          // temp 1 thread
+
+          // console.log(this.table.get(4));
+
+          const commandBuffer = this.table.get(10);
+          console.log(commandBuffer);
+          
+          console.log(this.colorTextureView);
+          console.log(this.table.get(6));
+
+          this.queue.submit([commandBuffer]);
+
+          this.isCommandBufferReady = false;
         }
 
         // ➿ Refresh canvas

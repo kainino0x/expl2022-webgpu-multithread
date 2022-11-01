@@ -24,8 +24,8 @@ class WorkerRenderer {
         colorAttachments: [colorAttachment],
     };
   
-    // const commandEncoder = this.device.createCommandEncoder();
-    const commandEncoder = this.table.get(20);
+    const commandEncoder = this.device.createCommandEncoder();
+    // const commandEncoder = this.table.get(20);
   
     // 🖌️ Encode drawing commands
     const passEncoder = commandEncoder.beginRenderPass(renderPassDesc);
@@ -50,15 +50,22 @@ class WorkerRenderer {
     passEncoder.drawIndexed(3, 1);
     passEncoder.end();
   
+    const commandBuffer = commandEncoder.finish();
+    // console.log(commandBuffer);
 
-    console.log('worker encode commands');
+    // console.log('worker encode commands');
 
     // this.device.queue.submit([commandEncoder.finish()]);
 
     // return commandEncoder.finish();
 
     // this.table.remove(10);
-    this.table.insert(10, commandEncoder.finish());
+    this.table.insert(10, commandBuffer);
+
+
+
+    // // hack to avoid texture destroy?
+    // colorAttachment.view = null;
   }
 }
 
