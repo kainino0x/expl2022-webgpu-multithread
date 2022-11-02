@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.13)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 project(hello)
@@ -95,23 +95,26 @@ endif()
 if(EMSCRIPTEN)
     set_target_properties(hello PROPERTIES
         SUFFIX ".html")
-    target_link_options(hello
+    target_link_options(hello PRIVATE
+        -sUSE_WEBGPU=1
+
+        -sUSE_PTHREADS=1 -sPTHREAD_POOL_SIZE=4
+        #-sPROXY_TO_PTHREAD
+
         # Enable DWARF debugging info. Requires setup; see:
         # https://developer.chrome.com/blog/wasm-debugging-2020/
-        PRIVATE "SHELL:-g"
+        -g -Wno-limited-postlink-optimizations
+
         # If source maps are enabled, DWARF doesn't seem to work.
-        #PRIVATE "SHELL:-gsource-map"
-        #PRIVATE "SHELL:--source-map-base ./"
+        #-gsource-map --source-map-base=./
 
-        PRIVATE "SHELL:-s USE_WEBGPU=1"
-        PRIVATE "SHELL:-s ASSERTIONS=1"
-        PRIVATE "SHELL:-s SAFE_HEAP=1"
-        #PRIVATE "SHELL:--closure 1"
-        #PRIVATE "SHELL:-s VERBOSE=1"
+        # More debugging options.
+        -sASSERTIONS=1 -sSAFE_HEAP=1
+        #-sVERBOSE=1
 
-        PRIVATE "SHELL:-s USE_PTHREADS=1"
-        PRIVATE "SHELL:-s PTHREAD_POOL_SIZE=4"
-        # PRIVATE "SHELL:-s PROXY_TO_PTHREAD"
+        # Optimization options. Enabling closure (and disabling debugging) results
+        # in smaller code size, and also tests for errors in library_webgpu.js.
+        #--closure=1
         )
 else()
     target_link_libraries(hello
