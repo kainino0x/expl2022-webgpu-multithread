@@ -2,10 +2,11 @@
   "name": "webgpu-multithread-test",
   "version": "0.0.1",
   "scripts": {
-    "start": "http-server -c-1 -a127.0.0.1 -p8070"
+    "start": "node serve.js"
   },
   "dependencies": {
     "@webgpu/types": "^0.1.22",
-    "http-server": "^14.1.1"
+    "finalhandler": "^1.2.0",
+    "serve-static": "^1.15.0"
   }
 }
