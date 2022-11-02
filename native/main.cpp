@@ -622,8 +622,8 @@ void init() {
         fragmentState.constants = constants.data();
         fragmentState.constantCount = constants.size();
 
-        wgpu::DepthStencilState depthStencilState{};
-        depthStencilState.format = wgpu::TextureFormat::Depth32Float;
+        // wgpu::DepthStencilState depthStencilState{};
+        // depthStencilState.format = wgpu::TextureFormat::Depth32Float;
 
         wgpu::RenderPipelineDescriptor descriptor{};
         // descriptor.layout = device.CreatePipelineLayout(&pl);
@@ -632,7 +632,7 @@ void init() {
         descriptor.vertex.entryPoint = "main_v";
         descriptor.fragment = &fragmentState;
         descriptor.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-        descriptor.depthStencil = &depthStencilState;
+        // descriptor.depthStencil = &depthStencilState;
         pipeline = device.CreateRenderPipeline(&descriptor);
     }
 
@@ -726,7 +726,7 @@ struct ThreadRenderData {
 };
 
 static std::array<ThreadRenderData, numThreads> threadData;
-static std::array<wgpu::CommandBuffer, numThreads> commandBuffers;
+static std::array<wgpu::RenderBundle, numThreads> renderBundles;
 static std::vector<std::thread> renderThreads;
 
 void threadRenderFunc(ThreadRenderData& data) {
@@ -742,33 +742,60 @@ void threadRenderFunc(ThreadRenderData& data) {
             // printf("Thread finish waiting frame\n");
         }
 
-        wgpu::CommandEncoder encoder;
-        {
-            std::scoped_lock lock(deviceMutex);
-            encoder = device.CreateCommandEncoder();
-        }
+        // wgpu::CommandEncoder encoder;
+        // {
+        //     std::scoped_lock lock(deviceMutex);
+        //     encoder = device.CreateCommandEncoder();
+        // }
 
         // printf("Thread %u recording command\n", data.threadIdx);
 
-        {
-            wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
-            pass.SetPipeline(pipeline);
-            pass.SetBindGroup(0, uniformBindGroup);
+        // {
+        //     wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&data.renderpass);
+        //     pass.SetPipeline(pipeline);
+        //     pass.SetBindGroup(0, uniformBindGroup);
 
-            for (size_t id : data.objectIds) {
+        //     for (size_t id : data.objectIds) {
 
-                // Decide if should draw object
-                // Mimic culling, LOD, etc.
-                if (ifObjectShouldDraw(id)) {
-                    pass.Draw(kDrawVertexCount, 1, 0, id);
-                }
+        //         // Decide if should draw object
+        //         // Mimic culling, LOD, etc.
+        //         if (ifObjectShouldDraw(id)) {
+        //             pass.Draw(kDrawVertexCount, 1, 0, id);
+        //         }
 
                 
-            }
-            // printf("%lu\n", data.objectIds.back());
-            pass.End();
+        //     }
+        //     // printf("%lu\n", data.objectIds.back());
+        //     pass.End();
+        // }
+        // commandBuffers[data.threadIdx] = encoder.Finish();
+
+        
+
+
+        
+        wgpu::RenderBundleEncoder encoder;
+        {
+            wgpu::TextureFormat format = wgpu::TextureFormat::BGRA8Unorm;
+            wgpu::RenderBundleEncoderDescriptor desc{};
+            desc.colorFormatsCount = 1;
+            desc.colorFormats = &format;
+
+            std::scoped_lock lock(deviceMutex);
+            encoder = device.CreateRenderBundleEncoder(&desc);
         }
-        commandBuffers[data.threadIdx] = encoder.Finish();
+
+        encoder.SetPipeline(pipeline);
+        encoder.SetBindGroup(0, uniformBindGroup);
+
+        for (size_t id : data.objectIds) {
+            // Decide if should draw object
+            // Mimic culling, LOD, etc.
+            if (ifObjectShouldDraw(id)) {
+                encoder.Draw(kDrawVertexCount, 1, 0, id);
+            }
+        }
+        renderBundles[data.threadIdx] = encoder.Finish();
 
         {
             std::scoped_lock lock(data.m);
@@ -777,6 +804,7 @@ void threadRenderFunc(ThreadRenderData& data) {
             // renderthreadsFinished++;
             data.condition.notify_one();
         }
+
     }
 }
 
@@ -795,28 +823,9 @@ void setupThreads() {
     }
 }
 
-void multiThreadedRender(wgpu::TextureView view, wgpu::TextureView depthStencilView, wgpu::RenderPassDescriptor renderpass) {
-    // printf("    render frame starts\n");
-    wgpu::RenderPassColorAttachment attachment{};
-    attachment.view = view;
-    attachment.loadOp = wgpu::LoadOp::Load;
-    attachment.storeOp = wgpu::StoreOp::Store;
-    attachment.clearValue = {0, 0, 0, 1};
-
-    wgpu::RenderPassDescriptor threadRenderpass{};
-    threadRenderpass.colorAttachmentCount = 1;
-    threadRenderpass.colorAttachments = &attachment;
-
-    wgpu::RenderPassDepthStencilAttachment depthStencilAttachment = {};
-    depthStencilAttachment.view = depthStencilView;
-    depthStencilAttachment.depthClearValue = 0;
-    depthStencilAttachment.depthLoadOp = wgpu::LoadOp::Load;
-    depthStencilAttachment.depthStoreOp = wgpu::StoreOp::Store;
-
-    threadRenderpass.depthStencilAttachment = &depthStencilAttachment;
-
+void multiThreadedRender(wgpu::TextureView view, wgpu::RenderPassDescriptor renderpass) {
     for (ThreadRenderData& d : threadData) {
-        d.renderpass = threadRenderpass;
+        // d.renderpass = threadRenderpass;
         d.rendering = true;
         d.condition.notify_one();
     }
@@ -836,16 +845,23 @@ void multiThreadedRender(wgpu::TextureView view, wgpu::TextureView depthStencilV
         std::scoped_lock lock(deviceMutex);
         // printf("    render submits commands\n\n");
 
-        // clear pass
-        {
-            wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-            wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
-            pass.End();
-            wgpu::CommandBuffer clearCommand = encoder.Finish();
-            queue.Submit(1, &clearCommand);
-        }
+        // // clear pass
+        // {
+        //     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+        //     wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
+        //     pass.End();
+        //     wgpu::CommandBuffer clearCommand = encoder.Finish();
+        //     queue.Submit(1, &clearCommand);
+        // }
 
-        queue.Submit(commandBuffers.size(), commandBuffers.data());
+        // queue.Submit(commandBuffers.size(), commandBuffers.data());
+
+        wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+        wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
+        pass.ExecuteBundles(renderBundles.size(), renderBundles.data());
+        pass.End();
+        wgpu::CommandBuffer commands = encoder.Finish();
+        queue.Submit(1, &commands);
     }
 }
 
@@ -1096,7 +1112,7 @@ void doCopyTestMapAsync(bool useRange) {
 // }
 
 wgpu::SwapChain swapChain;
-wgpu::TextureView canvasDepthStencilView;
+// wgpu::TextureView canvasDepthStencilView;
 // const uint32_t kWidth = 300;
 // const uint32_t kHeight = 150;
 const uint32_t kWidth = 512;
@@ -1128,18 +1144,20 @@ void frame() {
     renderpass.colorAttachmentCount = 1;
     renderpass.colorAttachments = &attachment;
 
-    wgpu::RenderPassDepthStencilAttachment depthStencilAttachment = {};
-    depthStencilAttachment.view = canvasDepthStencilView;
-    depthStencilAttachment.depthClearValue = 0;
-    depthStencilAttachment.depthLoadOp = wgpu::LoadOp::Clear;
-    depthStencilAttachment.depthStoreOp = wgpu::StoreOp::Store;
+    // wgpu::RenderPassDepthStencilAttachment depthStencilAttachment = {};
+    // depthStencilAttachment.view = canvasDepthStencilView;
+    // depthStencilAttachment.depthClearValue = 0;
+    // depthStencilAttachment.depthLoadOp = wgpu::LoadOp::Clear;
+    // depthStencilAttachment.depthStoreOp = wgpu::StoreOp::Store;
 
-    renderpass.depthStencilAttachment = &depthStencilAttachment;
+    // renderpass.depthStencilAttachment = &depthStencilAttachment;
+    renderpass.depthStencilAttachment = nullptr;
 
 #if defined(MULTITHREADED_RENDERING)
-    multiThreadedRender(backbuffer, canvasDepthStencilView, renderpass);
+    multiThreadedRender(backbuffer, renderpass);
 #else
-    render(backbuffer, canvasDepthStencilView, renderpass);
+    // render(backbuffer, canvasDepthStencilView, renderpass);
+    multiThreadedRender(backbuffer, renderpass);
 #endif
     // TODO: Read back from the canvas with drawImage() (or something) and
     // check the result.
@@ -1303,13 +1321,13 @@ void wgpu_setup_swap_chain()
         scDesc.presentMode = wgpu::PresentMode::Fifo;
         swapChain = device.CreateSwapChain(surface, &scDesc);
 
-    {
-        wgpu::TextureDescriptor descriptor{};
-        descriptor.usage = wgpu::TextureUsage::RenderAttachment;
-        descriptor.size = {kWidth, kHeight, 1};
-        descriptor.format = wgpu::TextureFormat::Depth32Float;
-        canvasDepthStencilView = device.CreateTexture(&descriptor).CreateView();
-    }
+    // {
+    //     wgpu::TextureDescriptor descriptor{};
+    //     descriptor.usage = wgpu::TextureUsage::RenderAttachment;
+    //     descriptor.size = {kWidth, kHeight, 1};
+    //     descriptor.format = wgpu::TextureFormat::Depth32Float;
+    //     canvasDepthStencilView = device.CreateTexture(&descriptor).CreateView();
+    // }
 }
 
 
@@ -1417,13 +1435,13 @@ void run() {
         scDesc.presentMode = wgpu::PresentMode::Fifo;
         swapChain = device.CreateSwapChain(surface, &scDesc);
 
-        {
-            wgpu::TextureDescriptor descriptor{};
-            descriptor.usage = wgpu::TextureUsage::RenderAttachment;
-            descriptor.size = {kWidth, kHeight, 1};
-            descriptor.format = wgpu::TextureFormat::Depth32Float;
-            canvasDepthStencilView = device.CreateTexture(&descriptor).CreateView();
-        }
+        // {
+        //     wgpu::TextureDescriptor descriptor{};
+        //     descriptor.usage = wgpu::TextureUsage::RenderAttachment;
+        //     descriptor.size = {kWidth, kHeight, 1};
+        //     descriptor.format = wgpu::TextureFormat::Depth32Float;
+        //     canvasDepthStencilView = device.CreateTexture(&descriptor).CreateView();
+        // }
     }
     emscripten_set_main_loop(frame, 0, false);
 #else
