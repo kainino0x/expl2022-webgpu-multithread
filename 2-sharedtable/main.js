@@ -7,20 +7,18 @@ const buffer = device.createBuffer({ size: 8, usage: GPUBufferUsage.COPY_DST | G
 
 const table = new GPUSharedTable();
 console.log('inserting into table', device, buffer);
-table.insert(1, device);
-table.insert(2, buffer);
+const deviceId = table.insert(device);
+const bufferId = table.insert(buffer);
 
-console.log('sending', table);
+console.log('sending', table, deviceId, bufferId);
 
 worker.onmessage = async () => {
   await buffer.mapAsync(GPUMapMode.READ);
   const mapped = buffer.getMappedRange();
-  console.log(new Uint32Array(mapped));
-
-  console.log(table.get(2));
+  console.log('read back', Array.from(new Uint32Array(mapped)));
 };
 
-worker.postMessage({ table });
+worker.postMessage({ table, deviceId, bufferId });
 device.queue.writeBuffer(buffer, 4, new Uint32Array([77777]));
 
 
