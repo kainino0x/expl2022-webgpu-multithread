@@ -96,8 +96,13 @@ if(EMSCRIPTEN)
     set_target_properties(hello PROPERTIES
         SUFFIX ".html")
     target_link_options(hello
-        PRIVATE "SHELL:-gsource-map"
-        PRIVATE "SHELL:--source-map-base ./"
+        # Enable DWARF debugging info. Requires setup; see:
+        # https://developer.chrome.com/blog/wasm-debugging-2020/
+        PRIVATE "SHELL:-g"
+        # If source maps are enabled, DWARF doesn't seem to work.
+        #PRIVATE "SHELL:-gsource-map"
+        #PRIVATE "SHELL:--source-map-base ./"
+
         PRIVATE "SHELL:-s USE_WEBGPU=1"
         PRIVATE "SHELL:-s ASSERTIONS=1"
         PRIVATE "SHELL:-s SAFE_HEAP=1"
