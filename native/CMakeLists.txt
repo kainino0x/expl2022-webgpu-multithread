@@ -97,7 +97,7 @@ if(EMSCRIPTEN)
         SUFFIX ".html")
     target_link_options(hello
         PRIVATE "SHELL:-gsource-map"
-        PRIVATE "SHELL:--source-map-base https://kai.graphics/webgpu-cross-platform-demo/out/web/"
+        PRIVATE "SHELL:--source-map-base ./"
         PRIVATE "SHELL:-s USE_WEBGPU=1"
         PRIVATE "SHELL:-s ASSERTIONS=1"
         PRIVATE "SHELL:-s SAFE_HEAP=1"
