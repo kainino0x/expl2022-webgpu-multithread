@@ -57,6 +57,8 @@
 
 #undef NDEBUG
 
+#define RUN_TESTS
+
 #define MULTITHREADED_RENDERING
 
 static wgpu::Device device;
@@ -708,6 +710,8 @@ static std::vector<std::thread> renderThreads;
 
 void threadRenderFunc(ThreadRenderData& data) {
     while (program_running) {
+        printf("threadRenderFunc: %d\n",data.threadIdx);
+
         {
             std::unique_lock lock(data.m);
             // printf("Thread %u waiting mutex\n", data.threadIdx);
@@ -716,7 +720,7 @@ void threadRenderFunc(ThreadRenderData& data) {
             if (!program_running) {
                 break;
             }
-            // printf("Thread finish waiting frame\n");
+            printf("Thread finish waiting frame\n");
         }
         
         wgpu::RenderBundleEncoder encoder;
@@ -781,7 +785,7 @@ void multiThreadedRender(wgpu::TextureView view, wgpu::RenderPassDescriptor rend
         threadData[i].condition.wait(lock, [=]{ return threadData[i].rendering == false;});
     }
 
-    // printf("    render submits commands\n\n");
+    printf("    render submits commands\n\n");
     // for (ThreadRenderData& d : threadData) {
     //     queue.Submit(1, &d.commands);
     //     // device.GetQueue().Submit(1, &d.commands);
@@ -969,6 +973,9 @@ wgpu::SwapChain swapChain;
 const uint32_t kWidth = 512;
 const uint32_t kHeight = 512;
 
+// temp test
+static int remainingFrames = 5;
+
 void frame() {
 
     wgpu::TextureView backbuffer = swapChain.GetCurrentTextureView();
@@ -990,10 +997,19 @@ void frame() {
 #endif
 
 #ifdef __EMSCRIPTEN__
-    emscripten_cancel_main_loop();
+    // emscripten_cancel_main_loop();
 
-    // exit(0) (rather than emscripten_force_exit(0)) ensures there is no dangling keepalive.
-    exit(0);
+    // // exit(0) (rather than emscripten_force_exit(0)) ensures there is no dangling keepalive.
+    // exit(0);
+
+    if (remainingFrames < 0) {
+        remainingFrames = 0;
+        emscripten_cancel_main_loop();
+        exit(0);
+    } else {
+        remainingFrames--;
+        printf("remaining frames:%d\n", remainingFrames);
+    }
 #else
     // submit_frame
     swapChain.Present();
@@ -1152,11 +1168,27 @@ void wgpu_setup_swap_chain()
 #endif
 
 
+#ifdef RUN_TESTS
+
+void run() {
+    init();
+
+    static constexpr int kNumTests = 1;
+    doMultithreadingBufferTest();
+
+#ifndef __EMSCRIPTEN__
+    while (testsCompleted < kNumTests) {
+        device.Tick();
+    }
+#endif
+}
+
+#else
 void run() {
     init();
 
 
-    static constexpr int kNumTests = 1;
+    // static constexpr int kNumTests = 1;
     // doMultithreadingBufferTest();
 
     // static constexpr int kNumTests = 5;
@@ -1190,6 +1222,7 @@ void run() {
 #endif
 
     emscripten_set_main_loop(frame, 0, false);
+    // frame();
 #else
 
     setup_window();
@@ -1225,6 +1258,8 @@ void run() {
 #endif
 
 }
+
+#endif // RUN_TESTS
 
 int main() {
     // GetDevice([](wgpu::Device dev) {
