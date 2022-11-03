@@ -57,7 +57,7 @@
 
 #undef NDEBUG
 
-#define RUN_TESTS
+// #define RUN_TESTS
 
 #define MULTITHREADED_RENDERING
 
@@ -775,17 +775,21 @@ void setupThreads() {
 void multiThreadedRender(wgpu::TextureView view, wgpu::RenderPassDescriptor renderpass) {
     for (ThreadRenderData& d : threadData) {
         // d.renderpass = threadRenderpass;
-        d.rendering = true;
-        d.condition.notify_one();
+        if (d.rendering == false) {
+            d.rendering = true;
+            d.condition.notify_one();
+        }
     }
 
+#ifndef __EMSCRIPTEN__
     for (uint32_t i = 0; i < numThreads; i++) {
         std::unique_lock<std::mutex> lock(threadData[i].m);
         // printf("    render waits threads %u\n", i);
         threadData[i].condition.wait(lock, [=]{ return threadData[i].rendering == false;});
     }
+#endif
 
-    printf("    render submits commands\n\n");
+    // printf("    render submits commands\n\n");
     // for (ThreadRenderData& d : threadData) {
     //     queue.Submit(1, &d.commands);
     //     // device.GetQueue().Submit(1, &d.commands);
@@ -805,12 +809,29 @@ void multiThreadedRender(wgpu::TextureView view, wgpu::RenderPassDescriptor rend
 
         // queue.Submit(commandBuffers.size(), commandBuffers.data());
 
+        
+
+#ifdef __EMSCRIPTEN__
+        bool threadStillRendering = false;
+        for (uint32_t i = 0; i < numThreads; i++) {
+            threadStillRendering |= threadData[i].rendering;
+        }
+        if (!threadStillRendering) {
+            wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+            wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
+            pass.ExecuteBundles(renderBundles.size(), renderBundles.data());
+            pass.End();
+            wgpu::CommandBuffer commands = encoder.Finish();
+            queue.Submit(1, &commands);
+        }
+#else
         wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
         wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
         pass.ExecuteBundles(renderBundles.size(), renderBundles.data());
         pass.End();
         wgpu::CommandBuffer commands = encoder.Finish();
         queue.Submit(1, &commands);
+#endif
     }
 }
 
@@ -1002,8 +1023,7 @@ void frame() {
     // // exit(0) (rather than emscripten_force_exit(0)) ensures there is no dangling keepalive.
     // exit(0);
 
-    if (remainingFrames < 0) {
-        remainingFrames = 0;
+    if (remainingFrames <= 0) {
         emscripten_cancel_main_loop();
         exit(0);
     } else {
@@ -1039,6 +1059,8 @@ void threadFunc(const ThreadArg& arg) {
 
     // std::lock_guard<std::mutex> lock(deviceMutex);
     std::scoped_lock lock(deviceMutex);
+
+    printf("Enter Thread, value: 0x%.8x\n", arg.value);
 
     uint32_t* ptr = static_cast<uint32_t*>(arg.buffer.GetMappedRange());
 
@@ -1170,13 +1192,30 @@ void wgpu_setup_swap_chain()
 
 #ifdef RUN_TESTS
 
+static constexpr int kNumTests = 1;
+
+#ifdef __EMSCRIPTEN__
+void testFrame() {
+    if (testsCompleted >= kNumTests) {
+        printf("Tests done, emscripten cancel main loop");
+        emscripten_cancel_main_loop();
+        exit(0);
+    }
+}
+#endif
+
 void run() {
     init();
 
-    static constexpr int kNumTests = 1;
     doMultithreadingBufferTest();
 
-#ifndef __EMSCRIPTEN__
+#ifdef __EMSCRIPTEN__
+    emscripten_set_main_loop(testFrame, 0, false);
+
+    // while (testsCompleted < kNumTests) {
+    //    emscripten_sleep(100);
+    // }
+#else
     while (testsCompleted < kNumTests) {
         device.Tick();
     }
@@ -1186,17 +1225,6 @@ void run() {
 #else
 void run() {
     init();
-
-
-    // static constexpr int kNumTests = 1;
-    // doMultithreadingBufferTest();
-
-    // static constexpr int kNumTests = 5;
-    // doCopyTestMappedAtCreation(false);
-    // doCopyTestMappedAtCreation(true);
-    // doCopyTestMapAsync(false);
-    // doCopyTestMapAsync(true);
-    // doRenderTest();
 
 #ifdef __EMSCRIPTEN__
     {
