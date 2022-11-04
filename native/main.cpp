@@ -475,8 +475,8 @@ static constexpr uint32_t kQuadPerRow = 16;
 static constexpr uint32_t kNumInstances = kQuadPerRow * kQuadPerRow;
 
 // static constexpr uint32_t numThreads = 1;
-static constexpr uint32_t numThreads = 2;
-// static constexpr uint32_t numThreads = 4;
+// static constexpr uint32_t numThreads = 2;
+static constexpr uint32_t numThreads = 4;
 // static constexpr size_t numObjectsPerThread = (kNumInstances + numThreads - 1) / numThreads;
 static constexpr size_t numObjectsPerThread = kNumInstances / numThreads;
 
@@ -661,6 +661,9 @@ void init() {
     wgpu::BindGroupEntry bindEntries[] = {
         { nullptr, 0, uniformBuffer },
     };
+    // Try to be safe with default size initialized.
+    bindEntries[0].offset = 0;
+    bindEntries[0].size = uniformBufferSize;
 
     {
         wgpu::BindGroupDescriptor desc{};
@@ -710,17 +713,16 @@ static std::vector<std::thread> renderThreads;
 
 void threadRenderFunc(ThreadRenderData& data) {
     while (program_running) {
-        printf("threadRenderFunc: %d\n",data.threadIdx);
+// #ifdef __EMSCRIPTEN__
+//         emscripten_sleep(1000);
+// #endif
 
         {
             std::unique_lock lock(data.m);
-            // printf("Thread %u waiting mutex\n", data.threadIdx);
-            
             data.condition.wait(lock, [&]{ return data.rendering == true || !program_running; });
             if (!program_running) {
                 break;
             }
-            printf("Thread finish waiting frame\n");
         }
         
         wgpu::RenderBundleEncoder encoder;
@@ -781,35 +783,14 @@ void multiThreadedRender(wgpu::TextureView view, wgpu::RenderPassDescriptor rend
         }
     }
 
-#ifndef __EMSCRIPTEN__
+    // Blocking on main thread (bad for web)
     for (uint32_t i = 0; i < numThreads; i++) {
         std::unique_lock<std::mutex> lock(threadData[i].m);
-        // printf("    render waits threads %u\n", i);
         threadData[i].condition.wait(lock, [=]{ return threadData[i].rendering == false;});
     }
-#endif
 
-    // printf("    render submits commands\n\n");
-    // for (ThreadRenderData& d : threadData) {
-    //     queue.Submit(1, &d.commands);
-    //     // device.GetQueue().Submit(1, &d.commands);
-    // }
     {
-        std::scoped_lock lock(deviceMutex);
-        // printf("    render submits commands\n\n");
-
-        // // clear pass
-        // {
-        //     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-        //     wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&renderpass);
-        //     pass.End();
-        //     wgpu::CommandBuffer clearCommand = encoder.Finish();
-        //     queue.Submit(1, &clearCommand);
-        // }
-
-        // queue.Submit(commandBuffers.size(), commandBuffers.data());
-
-        
+        std::scoped_lock lock(deviceMutex);       
 
 #ifdef __EMSCRIPTEN__
         bool threadStillRendering = false;
@@ -994,8 +975,8 @@ wgpu::SwapChain swapChain;
 const uint32_t kWidth = 512;
 const uint32_t kHeight = 512;
 
-// temp test
-static int remainingFrames = 5;
+// // temp test
+// static int remainingFrames = 5;
 
 void frame() {
 
@@ -1023,13 +1004,13 @@ void frame() {
     // // exit(0) (rather than emscripten_force_exit(0)) ensures there is no dangling keepalive.
     // exit(0);
 
-    if (remainingFrames <= 0) {
-        emscripten_cancel_main_loop();
-        exit(0);
-    } else {
-        remainingFrames--;
-        printf("remaining frames:%d\n", remainingFrames);
-    }
+    // if (remainingFrames <= 0) {
+    //     emscripten_cancel_main_loop();
+    //     exit(0);
+    // } else {
+    //     remainingFrames--;
+    //     printf("--------- remaining frames:%d\n", remainingFrames);
+    // }
 #else
     // submit_frame
     swapChain.Present();
@@ -1250,7 +1231,10 @@ void run() {
 #endif
 
     emscripten_set_main_loop(frame, 0, false);
-    // frame();
+
+    // while(program_running) {
+    //     emscripten_sleep(10000);
+    // }
 #else
 
     setup_window();
@@ -1272,7 +1256,6 @@ void run() {
 
         frame();
     }
-#endif
 
     program_running = false;
 
@@ -1283,6 +1266,8 @@ void run() {
     for (std::thread& t : renderThreads) {
         t.join();
     }
+#endif
+
 #endif
 
 }

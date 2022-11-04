@@ -99,7 +99,7 @@ if(EMSCRIPTEN)
         -sUSE_WEBGPU=1
 
         -sUSE_PTHREADS=1 -sPTHREAD_POOL_SIZE=4
-        #-sPROXY_TO_PTHREAD
+        # -sPROXY_TO_PTHREAD
 
         # Enable DWARF debugging info. Requires setup; see:
         # https://developer.chrome.com/blog/wasm-debugging-2020/
@@ -115,6 +115,11 @@ if(EMSCRIPTEN)
         # Optimization options. Enabling closure (and disabling debugging) results
         # in smaller code size, and also tests for errors in library_webgpu.js.
         #--closure=1
+
+        # # for emscripten_sleep
+        # -sASYNCIFY
+
+        -sALLOW_BLOCKING_ON_MAIN_THREAD=1
         )
 else()
     target_link_libraries(hello
