@@ -7,6 +7,6 @@
   "dependencies": {
     "@webgpu/types": "^0.1.22",
     "finalhandler": "^1.2.0",
-    "serve-static": "^1.15.0"
+    "serve-static": "^1.16.2"
   }
 }
